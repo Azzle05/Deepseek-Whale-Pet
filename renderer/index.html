@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: file:; media-src 'self' data: file:;" />
+<title>DeepSeek 余额桌宠</title>
+<style>
+  html, body {
+    margin: 0; padding: 0; width: 100%; height: 100%;
+    background: transparent; overflow: hidden;
+    font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+    user-select: none; -webkit-user-select: none;
+  }
+  .dshp-root {
+    position: fixed; inset: 0;
+    cursor: grab; touch-action: none;
+    --dshp-u: calc(100vw / 1026);
+  }
+  .dshp-root.dshp-left { transform: scaleX(-1); }
+  .dshp-root.dshp-dragging { cursor: grabbing; }
+  .dshp-body {
+    position: absolute; inset: 0;
+    transform-origin: 50% 100%;
+    transition: transform .22s cubic-bezier(.34,1.56,.64,1);
+  }
+  .dshp-body.dshp-bounce-soft  { animation: dshpBounceSoft  .45s cubic-bezier(.34,1.56,.64,1); }
+  .dshp-body.dshp-bounce-normal { animation: dshpBounceNormal .5s  cubic-bezier(.34,1.56,.64,1); }
+  .dshp-body.dshp-bounce-strong { animation: dshpBounceStrong .58s cubic-bezier(.34,1.56,.64,1); }
+  @keyframes dshpBounceSoft {
+    0%   { transform: scale(1,1) translateY(0); }
+    35%  { transform: scale(.975,1.06) translateY(-2%); }
+    70%  { transform: scale(1.02,.97) translateY(1%); }
+    100% { transform: scale(1,1) translateY(0); }
+  }
+  @keyframes dshpBounceNormal {
+    0%   { transform: scale(1,1) translateY(0); }
+    35%  { transform: scale(.94,1.12) translateY(-4%); }
+    70%  { transform: scale(1.04,.94) translateY(2%); }
+    100% { transform: scale(1,1) translateY(0); }
+  }
+  @keyframes dshpBounceStrong {
+    0%   { transform: scale(1,1) translateY(0); }
+    30%  { transform: scale(.90,1.18) translateY(-6%); }
+    65%  { transform: scale(1.08,.90) translateY(3%); }
+    100% { transform: scale(1,1) translateY(0); }
+  }
+  .dshp-img {
+    position: absolute; right: 0; bottom: 0;
+    width: 59.45%; height: 59.45%;
+    display: block; pointer-events: none;
+    -webkit-user-drag: none; user-select: none;
+  }
+  .dshp-memfill {
+    position: absolute; right: 0; bottom: 0;
+    width: 59.45%; height: 59.45%;
+    pointer-events: none; overflow: hidden;
+    display: none; z-index: 0;
+    -webkit-mask-image: url('../assets/DSniang1.png');
+    -webkit-mask-size: 100% 100%;
+    -webkit-mask-repeat: no-repeat;
+  }
+  .dshp-memfill.dshp-memfill-on { display: block; }
+  .dshp-memfill-fill {
+    position: absolute; left: 0; right: 0; bottom: 0;
+    height: 0%;
+    background: linear-gradient(to top, rgba(224,67,63,.38), rgba(224,67,63,.15));
+    transition: height .6s ease;
+  }
+  .dshp-bubble {
+    position: absolute; left: 0; top: 0; width: 100%;
+    aspect-ratio: 1026 / 700; pointer-events: none;
+    opacity: 0; transition: opacity .18s ease;
+    z-index: 1;
+  }
+  .dshp-bubble.dshp-bubble-open { opacity: 1; }
+  .dshp-bubble svg { display: block; width: 100%; height: 100%; pointer-events: none; }
+  .dshp-bubble svg path, .dshp-bubble svg ellipse { pointer-events: none; cursor: pointer; }
+  .dshp-bubble.dshp-bubble-open svg path, .dshp-bubble.dshp-bubble-open svg ellipse { pointer-events: visiblePainted; }
+  .dshp-text {
+    position: absolute; left: 44.25%; top: 38%;
+    transform: translate(-50%,-50%);
+    text-align: center; color: #536ba9; line-height: 1.18;
+    white-space: nowrap; pointer-events: none;
+  }
+  .dshp-root.dshp-left .dshp-text { transform: translate(-50%,-50%) scaleX(-1); }
+  .dshp-label { font-size: calc(var(--dshp-u) * 68); font-weight: 600; letter-spacing: .06em; }
+  .dshp-amount {
+    position: relative; font-size: calc(var(--dshp-u) * 119); font-weight: 800;
+    line-height: 1.05; min-height: 1.05em;
+  }
+  .dshp-odo { display: inline-flex; align-items: center; height: 1.05em; overflow: hidden; vertical-align: top; }
+  .dshp-odo-token { display: inline-flex; align-items: center; height: 1.05em; white-space: pre; }
+  .dshp-odo-digit {
+    position: relative; display: inline-block; width: .61em; height: 1.05em;
+    overflow: hidden; font-variant-numeric: tabular-nums;
+  }
+  .dshp-odo-track {
+    position: absolute; left: 0; top: 0; width: 100%;
+    transition: transform .68s cubic-bezier(.22,1,.36,1);
+    will-change: transform;
+  }
+  .dshp-odo-cell {
+    display: flex; align-items: center; justify-content: center;
+    height: 1.05em; line-height: 1.05;
+  }
+  .dshp-decrease {
+    position: absolute; left: 50%; bottom: 100%;
+    transform: translate(-50%, 35%); opacity: 0; pointer-events: none;
+    color: #e0433f; font-size: calc(var(--dshp-u) * 86); font-weight: 800;
+    line-height: 1.15; white-space: nowrap; text-shadow: 0 1px 3px rgba(255,255,255,.9);
+  }
+  .dshp-decrease.dshp-decrease-run { animation: dshpDecreaseFloat 1.35s ease-out; }
+  @keyframes dshpDecreaseFloat {
+    0%   { opacity: 0; transform: translate(-50%, 42%); }
+    15%  { opacity: 1; transform: translate(-50%, 4%); }
+    72%  { opacity: .92; transform: translate(-50%, -88%); }
+    100% { opacity: 0; transform: translate(-50%, -160%); }
+  }
+  .dshp-amount.dshp-low { color: #d25450; }
+  .dshp-amount.dshp-low .dshp-odo-track { color: #d25450; }
+  .dshp-hint  { font-size: calc(var(--dshp-u) * 54); color: #9fb0d9; letter-spacing: .02em; }
+  .dshp-time  { font-size: calc(var(--dshp-u) * 44); color: #9fb0d9; letter-spacing: .12em; font-variant-numeric: tabular-nums; }
+  .dshp-peak {
+    font-weight: 700; letter-spacing: .03em; line-height: 1.15;
+    margin-top: 3px; white-space: nowrap;
+  }
+  .dshp-peak-title { font-size: calc(var(--dshp-u) * 48); font-weight: 600; color: #536ba9; line-height: 1.3; }
+  .dshp-peak-state { font-size: calc(var(--dshp-u) * 96); font-weight: 800; line-height: 1.12; }
+  .dshp-peak-state.dshp-peak-off { color: #2fa24c; }
+  .dshp-peak-state.dshp-peak-on  { color: #e0433f; }
+  .dshp-peak-used { font-size: calc(var(--dshp-u) * 48); font-weight: 600; color: #536ba9; line-height: 1.3; }
+  .dshp-quote {
+    font-size: calc(var(--dshp-u) * 50); font-weight: 600; color: #536ba9;
+    line-height: 1.35; white-space: normal;
+    max-width: calc(var(--dshp-u) * 620); margin: 0 auto;
+  }
+  .dshp-menu {
+    position: fixed; z-index: 99; min-width: 150px; padding: 5px 0;
+    background: rgba(255,255,255,.97); color: #333;
+    border: 1px solid rgba(83,107,169,.35); border-radius: 10px;
+    box-shadow: 0 6px 24px rgba(0,0,0,.18);
+    font-size: 13px; display: none;
+  }
+  .dshp-menu.dshp-open { display: block; }
+  .dshp-menu div { padding: 7px 16px; cursor: pointer; }
+  .dshp-menu div:hover { background: #eef2fb; }
+  .dshp-menu .sep { height: 1px; background: #e3e7f2; margin: 4px 0; padding: 0; cursor: default; }
+  .dshp-menu .sep:hover { background: #e3e7f2; }
+  .dshp-menu .dshp-menu-info { cursor: default; color: #888; font-size: 12px; }
+  .dshp-menu .dshp-menu-info:hover { background: transparent; }
+</style>
+</head>
+<body>
+  <div class="dshp-root" id="root">
+    <div class="dshp-body" id="body">
+      <img class="dshp-img" id="img" src="../assets/DSniang1.png" alt="DeepSeek 余额" draggable="false" />
+      <div class="dshp-memfill" id="memFill"><div class="dshp-memfill-fill" id="memFillFill"></div></div>
+      <div class="dshp-bubble" id="bubble">
+        <svg viewBox="0 0 1026 700" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg">
+          <path class="dshp-bshape" fill="#FFFFFF" stroke="#203170" stroke-width="18" stroke-linejoin="round" stroke-linecap="round" d="M 827 248 A 373 232 0 1 0 81 246 A 373 232 0 0 0 301 465 A 57 32 10 0 0 413 484 A 373 232 0 0 0 827 248 Z"/>
+          <ellipse class="dshp-b1" cx="352" cy="561" rx="37.5" ry="26" fill="#FFFFFF" stroke="#203170" stroke-width="18"/>
+          <ellipse class="dshp-b2" cx="442" cy="646" rx="24.5" ry="18" fill="#FFFFFF" stroke="#203170" stroke-width="18"/>
+        </svg>
+        <div class="dshp-text" id="textBox">
+          <div class="dshp-label" id="labelEl">DeepSeek 余额</div>
+          <div class="dshp-amount" id="amountEl">
+            <div class="dshp-decrease" id="decreaseEl"></div>
+            <span>--</span>
+          </div>
+          <div class="dshp-hint" id="hintEl">加载中…</div>
+          <div class="dshp-time" id="timeEl"></div>
+          <div class="dshp-peak" id="peakEl"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="dshp-menu" id="menu">
+    <div data-act="refresh">🔄 立即刷新</div>
+    <div class="dshp-menu-info" id="menuStats" data-act="none">今日消耗：--</div>
+    <div data-act="settings">⚙️ 设置…</div>
+    <div class="sep"></div>
+    <div data-act="quit">✕ 退出</div>
+  </div>
+  <script src="pet.js"></script>
+</body>
+</html>

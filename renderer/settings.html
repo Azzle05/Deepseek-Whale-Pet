@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline';" />
+<title>DeepSeek 鲸鱼桌宠 · 设置</title>
+<style>
+  :root {
+    --bg: #edf1f0;
+    --panel: #ffffff;
+    --ink: #20302f;
+    --muted: #687776;
+    --line: #d7e0de;
+    --teal: #0f766e;
+    --teal-dark: #0b5f58;
+    --teal-soft: #e4f3f0;
+    --orange: #c56a2d;
+    --orange-soft: #fff0e4;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    font-family: "Microsoft YaHei", system-ui, sans-serif;
+    margin: 0; padding: 0 20px 16px; background: var(--bg); color: var(--ink);
+    overflow: hidden;
+  }
+  .header {
+    display: flex; align-items: center; justify-content: space-between; gap: 18px;
+    margin: 0 -20px 16px; padding: 18px 22px 17px;
+    background: #173f3b; color: #fff; border-bottom: 4px solid var(--orange);
+  }
+  .eyebrow {
+    display: block; margin-bottom: 4px; color: #9ed8cf;
+    font-size: 10px; font-weight: 700; letter-spacing: .14em;
+  }
+  h1 { font-size: 19px; margin: 0 0 3px; color: #fff; letter-spacing: .01em; }
+  p.desc { font-size: 12px; color: #c9dcda; margin: 0; line-height: 1.5; }
+  .privacy {
+    flex: 0 0 auto; padding: 5px 9px; border: 1px solid rgba(255,255,255,.26);
+    border-radius: 999px; color: #e6f5f2; background: rgba(255,255,255,.06);
+    font-size: 11px; white-space: nowrap;
+  }
+  .scroll { max-height: calc(100vh - 210px); overflow-y: auto; padding: 0 5px 8px 0; }
+  .scroll::-webkit-scrollbar { width: 8px; }
+  .scroll::-webkit-scrollbar-thumb { background: #c3cfcd; border-radius: 999px; }
+  .scroll::-webkit-scrollbar-track { background: transparent; }
+  .group {
+    margin: 0 0 13px; padding: 13px 15px 4px;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+    box-shadow: 0 5px 16px rgba(30, 57, 54, .045);
+  }
+  .group h2 {
+    display: flex; align-items: center; gap: 7px;
+    font-size: 13px; color: var(--teal-dark); font-weight: 700; letter-spacing: .03em;
+    border-bottom: 1px solid #e5ebea; padding-bottom: 8px; margin: 0 0 11px;
+  }
+  .group h2::before {
+    content: ""; width: 5px; height: 14px; border-radius: 2px;
+    background: var(--orange); flex: 0 0 auto;
+  }
+  label.field { display: block; font-size: 13px; margin-bottom: 5px; color: #435453; font-weight: 600; }
+  input[type=password], input[type=text], input[type=number], textarea {
+    width: 100%; box-sizing: border-box; padding: 8px 10px; border: 1px solid #cbd7d5;
+    border-radius: 7px; font-size: 13px; outline: none; margin-bottom: 10px;
+    background: #fbfcfc; color: var(--ink); transition: border-color .15s, box-shadow .15s;
+  }
+  select {
+    width: 100%; box-sizing: border-box; padding: 8px 10px; border: 1px solid #cbd7d5;
+    border-radius: 7px; font-size: 13px; outline: none; margin-bottom: 10px;
+    background: #fbfcfc; color: var(--ink); font-family: inherit;
+  }
+  textarea { min-height: 54px; resize: vertical; font-family: inherit; }
+  input:focus, select:focus, textarea:focus {
+    border-color: var(--teal); box-shadow: 0 0 0 3px rgba(15,118,110,.1);
+  }
+  input[type=number]::-webkit-outer-spin-button,
+  input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+  input[type=range] { width: 100%; margin: 4px 0 10px; accent-color: var(--teal); }
+  .row2 { display: flex; gap: 10px; align-items: center; }
+  .row2 input[type=number] { width: 90px; }
+  .check { display: flex; align-items: center; gap: 8px; margin: 3px 0 9px; cursor: pointer; }
+  .check input { width: 16px; height: 16px; cursor: pointer; flex: 0 0 auto; accent-color: var(--teal); }
+  .check span { font-size: 13px; color: #354544; }
+  .check .sub { font-size: 11px; color: var(--muted); margin-left: 4px; }
+  .radio-group { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
+  .radio {
+    display: flex; align-items: center; gap: 8px; cursor: pointer;
+    font-size: 13px; color: #354544; padding: 6px 8px;
+    border-radius: 6px; transition: background .15s;
+  }
+  .radio:hover { background: var(--teal-soft); }
+  .radio input { width: 15px; height: 15px; cursor: pointer; accent-color: var(--teal); }
+  .tip { font-size: 11px; color: var(--muted); margin: -4px 0 12px; line-height: 1.55; }
+  .btns {
+    display: flex; gap: 10px; margin: 0; padding: 12px 0 0;
+    border-top: 1px solid #d3dddb;
+  }
+  button { padding: 9px 18px; border: none; border-radius: 7px; font-size: 13px; font-weight: 600; cursor: pointer; }
+  #saveBtn { background: var(--teal); color: #fff; box-shadow: 0 3px 9px rgba(15,118,110,.18); }
+  #saveBtn:hover { background: var(--teal-dark); }
+  #testBtn { background: var(--orange-soft); color: #9d4d1d; }
+  #testBtn:hover { background: #ffe4d0; }
+  #imageBtn, #audioBtn {
+    background: #fff; color: var(--teal-dark); border: 1px solid #b9cfcb;
+    padding: 7px 12px; margin-bottom: 10px;
+  }
+  #imageBtn:hover, #audioBtn:hover { background: var(--teal-soft); border-color: #8dbab4; }
+  #status { font-size: 12px; margin-top: 7px; min-height: 15px; line-height: 1.5; word-break: break-all; }
+  .ok { color: #147b54; }
+  .err { color: #b93f35; }
+  .muted { color: var(--muted); }
+</style>
+</head>
+<body>
+  <div class="header">
+    <div>
+      <span class="eyebrow">DESKTOP WIDGET</span>
+      <h1>DeepSeek 鲸鱼桌宠</h1>
+      <p class="desc">余额、显示与系统行为均在此配置。</p>
+    </div>
+    <span class="privacy">API Key 仅本机保存</span>
+  </div>
+
+  <div class="scroll">
+    <div class="group">
+      <h2>账户</h2>
+      <label class="field" for="keyInput">API Key</label>
+      <input type="password" id="keyInput" placeholder="sk-..." autocomplete="off" spellcheck="false" />
+
+      <label class="field" for="labelInput">余额名称</label>
+      <input type="text" id="labelInput" placeholder="DeepSeek 余额" autocomplete="off" spellcheck="false" />
+
+      <label class="field" for="urlInput">余额接口地址（可选）</label>
+      <input type="text" id="urlInput" placeholder="https://api.deepseek.com/user/balance" autocomplete="off" spellcheck="false" />
+      <div class="tip">官方 DeepSeek 留空即可；第三方兼容服务填它的余额接口地址。</div>
+
+      <label class="field" for="refreshInput">自动刷新间隔（秒）</label>
+      <input type="number" id="refreshInput" min="0" max="3600" step="1" placeholder="30" />
+      <div class="tip">每多少秒自动刷新余额，默认 30；填 0 关闭自动刷新。</div>
+    </div>
+
+    <div class="group">
+      <h2>提醒与统计</h2>
+      <label class="check">
+        <input type="checkbox" id="lowAlertInput" checked />
+        <span>低余额提醒</span>
+        <span class="sub">余额低于阈值时弹通知</span>
+      </label>
+      <div class="row2">
+        <label class="field" for="lowThresholdInput" style="margin:0;">阈值</label>
+        <input type="number" id="lowThresholdInput" min="0" step="1" value="5" />
+      </div>
+      <div class="tip" style="margin-top:2px;">余额低于这个数值（默认 ¥5）时提醒。</div>
+
+      <label class="check">
+        <input type="checkbox" id="trackStatsInput" checked />
+        <span>记录今日消耗</span>
+        <span class="sub">右键菜单显示今日消耗金额</span>
+      </label>
+    </div>
+
+    <div class="group">
+      <h2>显示内容</h2>
+      <label class="field" style="margin-bottom:6px;">小鲸鱼显示</label>
+      <div class="radio-group" id="contentModeGroup">
+        <label class="radio"><input type="radio" name="contentMode" value="balance" checked /><span>余额查询</span></label>
+        <label class="radio"><input type="radio" name="contentMode" value="memory" /><span>系统内存</span></label>
+      </div>
+      <div class="tip">切换小鲸鱼显示余额，或实时系统内存占用。</div>
+
+      <div id="memoryStyleWrap">
+        <label class="field" style="margin-bottom:6px;">内存显示方式</label>
+        <div class="radio-group" id="memoryStyleGroup">
+          <label class="radio"><input type="radio" name="memoryStyle" value="fill" checked /><span>图形填充</span></label>
+          <label class="radio"><input type="radio" name="memoryStyle" value="bubble" /><span>气泡显示</span></label>
+        </div>
+        <div class="tip">图形填充：按占用比例从下往上给鲸鱼叠加半透明红色；气泡显示：在气泡里显示占用百分比。</div>
+      </div>
+
+      <div id="displayStyleWrap">
+        <label class="field" style="margin-bottom:6px;">余额显示方式</label>
+        <div class="radio-group" id="displayStyleGroup">
+          <label class="radio"><input type="radio" name="displayStyle" value="bubble" checked /><span>鲸鱼气泡</span></label>
+          <label class="radio"><input type="radio" name="displayStyle" value="bar" /><span>桌面横条</span></label>
+        </div>
+        <div class="tip">横条显示在鲸鱼左侧下方，不再展开气泡；系统内存模式只能使用鲸鱼气泡。</div>
+      </div>
+    </div>
+
+    <div class="group">
+      <h2>外观与体验</h2>
+      <label class="check">
+        <input type="checkbox" id="showTimeInput" checked />
+        <span>显示时间</span>
+        <span class="sub">气泡里显示当前时间（HH:MM）</span>
+      </label>
+      <label class="check">
+        <input type="checkbox" id="bounceInput" checked />
+        <span>余额变动弹跳</span>
+        <span class="sub">余额变化时小鲸鱼跳一下</span>
+      </label>
+      <label class="check">
+        <input type="checkbox" id="decreaseHintInput" checked />
+        <span>余额减少提示</span>
+        <span class="sub">余额下降时显示红色浮动金额</span>
+      </label>
+      <label class="field" for="bounceStrengthInput">回弹程度</label>
+      <select id="bounceStrengthInput">
+        <option value="soft">温和（轻压）</option>
+        <option value="normal">标准（默认）</option>
+        <option value="strong">强劲（深压）</option>
+      </select>
+      <div class="tip">点按鲸鱼时的按压/回弹手感，默认标准。</div>
+      <label class="check">
+        <input type="checkbox" id="soundInput" checked />
+        <span>提示音效</span>
+        <span class="sub">余额变化/低余额时播放轻提示音</span>
+      </label>
+
+      <label class="field" for="volumeInput">音量</label>
+      <div class="row2">
+        <input type="range" id="volumeInput" min="0" max="100" step="1" value="70" style="flex:1;" />
+        <span class="sub" id="volumeValue" style="min-width:46px;text-align:right;">70%</span>
+      </div>
+      <div class="tip" style="margin-top:2px;">控制所有音效的音量（提示音 + 点击音效）。</div>
+
+      <div id="bubbleModeWrap">
+        <label class="field" style="margin-bottom:6px;">气泡显示</label>
+        <div class="radio-group" id="bubbleModeGroup">
+          <label class="radio"><input type="radio" name="bubbleMode" value="always" /><span>不隐藏气泡</span></label>
+          <label class="radio"><input type="radio" name="bubbleMode" value="hover" checked /><span>隐藏并悬停显示</span></label>
+          <label class="radio"><input type="radio" name="bubbleMode" value="click" /><span>隐藏并点击显示</span></label>
+        </div>
+        <div class="tip">闲置时气泡完全收起，不挡鼠标；悬停或点击鲸鱼本体后展开。</div>
+      </div>
+
+      <label class="check">
+        <input type="checkbox" id="clickSoundInput" checked />
+        <span>点击音效</span>
+        <span class="sub">按压鲸鱼或点击气泡时播放声音</span>
+      </label>
+      <label class="field" for="clickSoundSetInput">音效类型</label>
+      <select id="clickSoundSetInput">
+        <option value="duck">小黄鸭</option>
+        <option value="fx1">音效1</option>
+        <option value="custom">自定义音频</option>
+      </select>
+      <button id="audioBtn" type="button" style="margin-bottom:10px;">选择自定义音效…</button>
+      <div class="tip">默认小黄鸭；自定义可选 mp3/wav/ogg/m4a 音频文件。</div>
+
+      <label class="check">
+        <input type="checkbox" id="idleInput" checked />
+        <span>闲置半透明</span>
+        <span class="sub">一段时间无操作后变淡</span>
+      </label>
+      <div class="row2">
+        <label class="field" for="idleSecInput" style="margin:0;">闲置秒数</label>
+        <input type="number" id="idleSecInput" min="1" max="300" step="1" value="5" />
+      </div>
+      <div class="tip" style="margin-top:2px;">多少秒无操作后变淡（默认 5 秒）。</div>
+
+      <label class="check">
+        <input type="checkbox" id="quotesInput" />
+        <span>随机语录</span>
+        <span class="sub">偶尔在气泡里冒一句</span>
+      </label>
+      <textarea id="quotesTextInput" placeholder="每行或分号分隔一条，例如：&#10;加油，余额还够用~&#10;记得充值哦；今天也要开心" spellcheck="false"></textarea>
+    </div>
+
+    <div class="group">
+      <h2>外观定制</h2>
+      <label class="field" for="scaleInput">鲸鱼大小</label>
+      <div class="row2">
+        <input type="range" id="scaleInput" min="0.6" max="1.4" step="0.1" value="1" style="flex:1;" />
+        <span class="sub" id="scaleValue" style="min-width:46px;text-align:right;">100%</span>
+      </div>
+      <div class="tip" style="margin-top:2px;">拖动调整小鲸鱼的显示大小（60%–140%）。</div>
+      <label class="check">
+        <input type="checkbox" id="customImageInput" />
+        <span>使用自定义图片</span>
+      </label>
+      <button id="imageBtn" type="button">选择鲸鱼图片…</button>
+      <div class="tip">建议 1026×1026 的 PNG，气泡位置需与原图一致（中心 455,247）。</div>
+    </div>
+
+    <div class="group">
+      <h2>系统</h2>
+      <label class="check">
+        <input type="checkbox" id="autoStartInput" />
+        <span>开机自启</span>
+        <span class="sub">随系统登录自动启动</span>
+      </label>
+      <label class="check">
+        <input type="checkbox" id="hotkeyInput" checked />
+        <span>全局热键</span>
+        <span class="sub">Ctrl+Shift+R 立即刷新</span>
+      </label>
+      <label class="check">
+        <input type="checkbox" id="alwaysTopInput" checked />
+        <span>始终置顶</span>
+        <span class="sub">小鲸鱼悬浮在其它窗口之上</span>
+      </label>
+      <label class="field" style="margin-bottom:6px;">任务栏 / 托盘显示位置</label>
+      <div class="radio-group" id="displayModeGroup">
+        <label class="radio"><input type="radio" name="displayMode" value="all" checked /><span>全显示（任务栏 + 托盘都有图标）</span></label>
+        <label class="radio"><input type="radio" name="displayMode" value="taskbar" /><span>仅任务栏（只有任务栏图标）</span></label>
+        <label class="radio"><input type="radio" name="displayMode" value="tray" /><span>仅托盘（只有托盘图标）</span></label>
+        <label class="radio"><input type="radio" name="displayMode" value="hidden" /><span>全隐藏（任务栏和托盘都没有图标）</span></label>
+      </div>
+      <div class="tip" style="margin-top:2px;">此选项只影响任务栏/托盘图标，与桌宠本体无关——小鲸鱼始终显示在桌面，是否置顶由上方「始终置顶」控制。</div>
+      <label class="check">
+        <input type="checkbox" id="snapInput" checked />
+        <span>自动吸附屏幕边缘</span>
+      </label>
+    </div>
+  </div>
+
+  <div class="btns">
+    <button id="saveBtn">保存</button>
+    <button id="testBtn">保存并测试</button>
+  </div>
+  <div id="status"></div>
+  <script src="settings.js"></script>
+</body>
+</html>

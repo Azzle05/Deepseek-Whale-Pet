@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline';" />
+<title>DeepSeek 余额横条</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body {
+    width: 100%; height: 100%; margin: 0; padding: 0;
+    overflow: hidden; background: transparent;
+    font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+    user-select: none; -webkit-user-select: none;
+  }
+  .bar {
+    position: absolute; left: 2px; right: 2px; bottom: 2px; height: 42px;
+    display: flex; flex-direction: row;
+    align-items: center; justify-content: flex-start; gap: 7px; padding: 4px 12px;
+    color: #f7f9ff; background: rgba(8,10,15,.96);
+    border: 1px solid rgba(255,255,255,.12); border-right: 0;
+    border-radius: 8px 0 0 8px;
+    box-shadow: -4px 6px 16px rgba(0,0,0,.24);
+  }
+  .balance-row {
+    position: relative; display: flex; align-items: center; flex: 0 0 auto;
+    justify-content: flex-start; font-size: 21px; font-weight: 800;
+    line-height: 1; font-variant-numeric: tabular-nums;
+  }
+  .odo { display: inline-flex; align-items: center; height: 1.05em; overflow: hidden; }
+  .odo-token { display: inline-flex; align-items: center; height: 1.05em; white-space: pre; }
+  .odo-digit { position: relative; display: inline-block; width: .61em; height: 1.05em; overflow: hidden; }
+  .odo-track {
+    position: absolute; left: 0; top: 0; width: 100%;
+    transition: transform .68s cubic-bezier(.22,1,.36,1);
+    will-change: transform;
+  }
+  .odo-cell { display: flex; align-items: center; justify-content: center; height: 1.05em; line-height: 1.05; }
+  .decrease {
+    position: absolute; left: 50%; bottom: 80%; transform: translate(-50%, 25%);
+    color: #ff5c58; font-size: 27px; font-weight: 900; opacity: 0; white-space: nowrap;
+    pointer-events: none; text-shadow: 0 1px 4px rgba(0,0,0,.85);
+  }
+  .decrease.run { animation: barDecreaseFloat 1.3s ease-out; }
+  @keyframes barDecreaseFloat {
+    0% { opacity: 0; transform: translate(-50%, 42%); }
+    18% { opacity: 1; transform: translate(-50%, 2%); }
+    76% { opacity: .9; transform: translate(-50%, -105%); }
+    100% { opacity: 0; transform: translate(-50%, -185%); }
+  }
+  .info-row {
+    display: flex; align-items: center; justify-content: flex-start; gap: 7px;
+    min-width: 0; color: #c5cbdb; font-size: 12px; font-weight: 600;
+    line-height: 1.1; white-space: nowrap;
+  }
+  .info-row span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .peak-on { color: #ff5c58; font-weight: 800; }
+  .peak-off { color: #57d477; font-weight: 800; }
+</style>
+</head>
+<body>
+  <div class="bar">
+    <div class="balance-row" id="balanceRow"><span>--</span></div>
+    <div class="info-row">
+      <span id="todayText">今日 --</span>
+      <span id="peakText">时段 --</span>
+    </div>
+  </div>
+  <script src="bar.js"></script>
+</body>
+</html>

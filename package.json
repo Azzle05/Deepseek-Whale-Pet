@@ -1,0 +1,47 @@
+{
+  "name": "deepseek-whale-pet",
+  "version": "1.4.0",
+  "description": "DeepSeek 余额小鲸鱼独立桌面桌宠",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "smoke": "electron . --smoke-test",
+    "dist": "electron-builder --win portable"
+  },
+  "author": "Azzle <1527442452@qq.com>",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "43.4.1",
+    "electron-builder": "^26.15.3",
+    "png-to-ico": "^3.0.2"
+  },
+  "build": {
+    "appId": "com.azzle.deepseek-whale-pet",
+    "productName": "DeepSeek-Whale-Pet",
+    "electronVersion": "43.4.1",
+    "copyright": "Copyright (c) 2026 Azzle. Based on open-source projects listed in THIRD_PARTY_NOTICES.md.",
+    "files": [
+      "main.js",
+      "preload.js",
+      "renderer/**/*",
+      "assets/**/*",
+      "build/icon.ico",
+      "package.json",
+      "README.md",
+      "LICENSE",
+      "THIRD_PARTY_NOTICES.md"
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "target": [
+        "portable"
+      ],
+      "icon": "build/icon.ico"
+    },
+    "portable": {
+      "artifactName": "DeepSeek-Whale-Pet-${version}-portable.exe"
+    }
+  }
+}
