@@ -10,14 +10,84 @@ app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required')
 const path = require('node:path')
 const fs = require('node:fs')
 const os = require('node:os')
+const { pathToFileURL } = require('node:url')
 
 const BALANCE_URL = 'https://api.deepseek.com/user/balance'
 const DEFAULT_SIZE = 196
 const MIN_SIZE = 96
-const MAX_SIZE = 292
+const MAX_SIZE = 588
 const MIN_SCALE = 0.6
-const MAX_SCALE = 1.4
+const MAX_SCALE = 3
 const BAR_HEIGHT = 84
+const AGENT_IDS = ['codex', 'claudecode', 'harness']
+const AGENT_STATES = [
+  'idle', 'link', 'wait', 'think', 'tool', 'run', 'reply',
+  'approval', 'error', 'interrupted', 'done', 'hover', 'sleep', 'click',
+]
+const AGENT_STATE_FALLBACKS = {
+  idle: ['sleep'],
+  link: ['wait', 'think'],
+  wait: ['link', 'think'],
+  think: ['reply', 'run'],
+  tool: ['run', 'think'],
+  run: ['tool', 'think'],
+  reply: ['think', 'done'],
+  approval: ['wait'],
+  error: ['interrupted'],
+  interrupted: ['error'],
+  done: ['idle'],
+  hover: ['idle'],
+  sleep: ['idle'],
+  click: [],
+}
+const AGENT_STATUS_FRESH_MS = 5 * 60 * 1000
+const CODEX_WATCH_INTERVAL_MS = 800
+const CODEX_HOOK_WATCH_INTERVAL_MS = 250
+const CODEX_DONE_HOLD_MS = 4000
+const AGENT_IDLE_TO_SLEEP_MS = 20000
+const CODEX_TAIL_CHUNK_BYTES = 512 * 1024
+const CODEX_MAX_PENDING_BYTES = 4 * 1024 * 1024
+const CODEX_DETAIL_LIMIT = 120
+const CODEX_HOOK_MARKER = 'deepseek-whale-pet-codex-hook.ps1'
+const CODEX_HOOK_LEGACY_MARKER = 'codex-hook.ps1'
+const CODEX_HOOK_EVENTS = [
+  'SessionStart',
+  'UserPromptSubmit',
+  'PreToolUse',
+  'PermissionRequest',
+  'PostToolUse',
+  'Stop',
+  'Interrupt',
+  'SessionEnd',
+]
+const CLAUDE_HOOK_WATCH_INTERVAL_MS = 250
+const CLAUDE_DONE_HOLD_MS = 4000
+const CLAUDE_TAIL_CHUNK_BYTES = 512 * 1024
+const CLAUDE_MAX_PENDING_BYTES = 4 * 1024 * 1024
+const CLAUDE_HOOK_MARKER = 'deepseek-whale-pet-claude-hook.ps1'
+const CLAUDE_HOOK_EVENTS = [
+  'SessionStart',
+  'UserPromptSubmit',
+  'PreToolUse',
+  'PostToolUse',
+  'PostToolUseFailure',
+  'PermissionRequest',
+  'Notification',
+  'PreCompact',
+  'SubagentStart',
+  'SubagentStop',
+  'Stop',
+  'SessionEnd',
+]
+const HARNESS_HOOK_WATCH_INTERVAL_MS = 250
+const HARNESS_DONE_HOLD_MS = 4000
+const HARNESS_TAIL_CHUNK_BYTES = 512 * 1024
+const HARNESS_MAX_PENDING_BYTES = 4 * 1024 * 1024
+const HARNESS_BRIDGE_ID = 'whale-pet-harness-bridge'
+const HARNESS_BRIDGE_PACKAGE = 'dsh-whale-pet-harness-bridge'
+const HARNESS_PATCH_BEGIN = '# BEGIN DeepSeek Whale Pet Harness bridge'
+const HARNESS_PATCH_END = '# END DeepSeek Whale Pet Harness bridge'
+const HARNESS_PROFILE = 'web'
 
 // ---------------------------------------------------------------------------
 // 配置（AppData/deepseek-whale-pet/config.json）
@@ -61,6 +131,12 @@ function defaultConfig() {
     showTime: true,
     displayMode: 'all',   // all | taskbar | tray | hidden
     alwaysOnTop: true,      // 是否始终置顶
+    agentAnimationEnabled: false, // 实验性：Agent 状态 GIF 动画
+    agentType: 'codex',          // codex | claudecode | harness
+    agentClickAnimation: true,   // 点击鲸鱼时播放 click 状态 GIF
+    codexHookEnabled: false,     // 通过 Codex Hook 获取低延迟状态事件
+    claudeHookEnabled: false,    // 通过 Claude Code Hook 获取低延迟状态事件
+    harnessHookEnabled: false,   // 通过 DeepSeek Harness bridge 获取低延迟状态事件
   }
 }
 
@@ -118,6 +194,12 @@ function rendererConfig(c, includeSecrets) {
     displayMode: oneOf(c.displayMode, ['all', 'taskbar', 'tray', 'hidden'], 'all'),
     alwaysOnTop: c.alwaysOnTop !== false,
     showTime: c.showTime !== false,
+    agentAnimationEnabled: !!c.agentAnimationEnabled,
+    agentType: oneOf(c.agentType, AGENT_IDS, 'codex'),
+    agentClickAnimation: c.agentClickAnimation !== false,
+    codexHookEnabled: !!c.codexHookEnabled,
+    claudeHookEnabled: !!c.claudeHookEnabled,
+    harnessHookEnabled: !!c.harnessHookEnabled,
   }
   if (includeSecrets) {
     data.apiKey = c.apiKey
@@ -144,6 +226,38 @@ let balanceFetchCount = 0
 let stats = { today: '', todayUsed: 0, lastBalance: null }
 let lastLowAlertAt = 0
 let cfg = loadConfig()
+let petRendererReady = false
+let latestAgentEvent = null
+let agentEventSeq = 0
+let agentRuntimeStatus = {
+  source: '',
+  agent: '',
+  state: '',
+  event: '',
+  detail: '',
+  updatedAt: 0,
+  watcherActive: false,
+  watcherPath: '',
+  hookWatcherActive: false,
+  hookPath: '',
+  claudeHookWatcherActive: false,
+  claudeHookPath: '',
+  harnessHookWatcherActive: false,
+  harnessHookPath: '',
+}
+let codexWatcher = null
+let codexHookWatcher = null
+let codexDoneIdleTimer = null
+let agentIdleToSleepTimer = null
+let agentIdleToSleepAgent = ''
+let lastCodexHookEventAt = 0
+let codexHookLastError = ''
+let claudeHookWatcher = null
+let claudeDoneIdleTimer = null
+let claudeHookLastError = ''
+let harnessHookWatcher = null
+let harnessDoneIdleTimer = null
+let harnessHookLastError = ''
 
 // ---------------------------------------------------------------------------
 // 消耗统计（按自然日累计，持久化到 history.json）
@@ -204,7 +318,24 @@ function notifyLowBalance(total, currency) {
 // ---------------------------------------------------------------------------
 // 桌宠窗口
 // ---------------------------------------------------------------------------
+let startupServicesScheduled = false
+
+function scheduleStartupServices() {
+  if (startupServicesScheduled) return
+  startupServicesScheduled = true
+  setImmediate(() => {
+    if (petWin && !petWin.isDestroyed()) applyDisplayMode(cfg.displayMode)
+    syncBarWindow()
+    updateHotkey(cfg.hotkey)
+    syncCodexHookInstallation()
+    syncClaudeHookInstallation()
+    syncHarnessHookInstallation()
+    updateAgentWatcher()
+  })
+}
+
 function createPetWindow(posOverride) {
+  petRendererReady = false
   const size = petSize(cfg.scale)
   const wa = screen.getPrimaryDisplay().workArea
   const mode = cfg.displayMode || 'all'
@@ -251,11 +382,19 @@ function createPetWindow(posOverride) {
 
   petWin.setAlwaysOnTop(true, 'screen-saver')
   petWin.loadFile(path.join(__dirname, 'renderer', 'index.html'))
+  petWin.webContents.on('did-finish-load', () => {
+    petRendererReady = true
+    flushPendingAgentEvent()
+    scheduleStartupServices()
+  })
   petWin.once('ready-to-show', () => {
     petWin.show()
     petWin.focus()
   })
-  petWin.on('closed', () => { petWin = null })
+  petWin.on('closed', () => {
+    petRendererReady = false
+    petWin = null
+  })
 }
 
 function barSize(scale) {
@@ -269,7 +408,7 @@ function barSize(scale) {
 function barBoundsForPet() {
   if (!petWin || petWin.isDestroyed()) return null
   const pet = petWin.getBounds()
-  const size = barSize(loadConfig().scale)
+  const size = barSize(cfg.scale)
   const work = screen.getDisplayMatching(pet).workArea
   let x = pet.x + Math.round(pet.width * 0.46) - size.width
   let y = pet.y + pet.height - size.height - Math.max(4, Math.round(pet.height * 0.03))
@@ -320,7 +459,7 @@ function createBarWindow() {
 }
 
 function syncBarWindow() {
-  const c = loadConfig()
+  const c = cfg
   const shouldShow = c.displayStyle === 'bar' && c.contentMode !== 'memory'
   if (!shouldShow) {
     if (barWin && !barWin.isDestroyed()) barWin.hide()
@@ -336,6 +475,12 @@ function syncBarWindow() {
     barWin.showInactive()
     if (petWin && !petWin.isDestroyed()) petWin.moveTop()
   }
+}
+
+function syncBarBounds() {
+  if (!barWin || barWin.isDestroyed() || !barWin.isVisible()) return
+  const bounds = barBoundsForPet()
+  if (bounds) barWin.setBounds(bounds)
 }
 
 // 运行时 setSkipTaskbar 在 Windows 上不可靠，切换任务栏显隐需重建窗口
@@ -446,7 +591,10 @@ function openSettings() {
   settingsWin.setMenuBarVisibility(false)
   settingsWin.loadFile(path.join(__dirname, 'renderer', 'settings.html'))
   settingsWin.once('ready-to-show', () => settingsWin.show())
-  settingsWin.on('closed', () => { settingsWin = null })
+  settingsWin.on('closed', () => {
+    settingsWin = null
+    resetManualAgentTest()
+  })
 }
 
 // ---------------------------------------------------------------------------
@@ -574,8 +722,1950 @@ async function chooseCustomAudio() {
 }
 
 // ---------------------------------------------------------------------------
+// Agent GIF 素材索引
+// 只解析状态目录，并缓存每张 GIF 的循环时长；帧数据不常驻内存。
+// ---------------------------------------------------------------------------
+const gifMetaCache = new Map()
+
+function createGifByteReader(filePath) {
+  const stat = fs.statSync(filePath)
+  const fd = fs.openSync(filePath, 'r')
+  const chunk = Buffer.allocUnsafe(256 * 1024)
+  let chunkStart = 0
+  let chunkEnd = 0
+  let chunkPos = 0
+
+  function fill() {
+    const absolute = chunkStart + chunkPos
+    if (absolute >= stat.size) return false
+    const bytesRead = fs.readSync(fd, chunk, 0, Math.min(chunk.length, stat.size - absolute), absolute)
+    if (bytesRead <= 0) return false
+    chunkStart = absolute
+    chunkEnd = bytesRead
+    chunkPos = 0
+    return true
+  }
+
+  function byte() {
+    if (chunkPos >= chunkEnd && !fill()) throw new Error('GIF file is truncated')
+    return chunk[chunkPos++]
+  }
+
+  function skip(length) {
+    let remaining = Math.max(0, Number(length) || 0)
+    while (remaining > 0) {
+      if (chunkPos >= chunkEnd && !fill()) throw new Error('GIF file is truncated')
+      const count = Math.min(remaining, chunkEnd - chunkPos)
+      chunkPos += count
+      remaining -= count
+    }
+  }
+
+  return {
+    byte,
+    skip,
+    size: stat.size,
+    close: () => fs.closeSync(fd),
+  }
+}
+
+function skipGifSubBlocks(reader) {
+  while (true) {
+    const size = reader.byte()
+    if (size === 0) return
+    reader.skip(size)
+  }
+}
+
+function readGifMetadata(filePath) {
+  const stat = fs.statSync(filePath)
+  const cached = gifMetaCache.get(filePath)
+  if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) return cached
+
+  const reader = createGifByteReader(filePath)
+  try {
+    const signature = String.fromCharCode(
+      reader.byte(), reader.byte(), reader.byte(),
+      reader.byte(), reader.byte(), reader.byte()
+    )
+    if (signature !== 'GIF87a' && signature !== 'GIF89a') throw new Error('Not a GIF file')
+
+    reader.skip(4) // 逻辑屏幕宽高
+    const packed = reader.byte()
+    reader.skip(2) // 背景色索引与像素宽高比
+    if (packed & 0x80) reader.skip(3 * (1 << ((packed & 0x07) + 1)))
+
+    let frameCount = 0
+    let durationMs = 0
+    let pendingDelay = 0
+    while (true) {
+      const marker = reader.byte()
+      if (marker === 0x3b) break
+      if (marker === 0x21) {
+        const label = reader.byte()
+        const blockSize = reader.byte()
+        if (label === 0xf9 && blockSize >= 4) {
+          reader.skip(1) // 处置方式、透明色标志
+          const low = reader.byte()
+          const high = reader.byte()
+          pendingDelay = low | (high << 8)
+          reader.skip(blockSize - 3)
+          skipGifSubBlocks(reader)
+        } else if (blockSize > 0) {
+          reader.skip(blockSize)
+          skipGifSubBlocks(reader)
+        }
+        continue
+      }
+      if (marker !== 0x2c) throw new Error('Unexpected GIF block')
+
+      reader.skip(8) // 图像位置与尺寸
+      const imagePacked = reader.byte()
+      if (imagePacked & 0x80) reader.skip(3 * (1 << ((imagePacked & 0x07) + 1)))
+      reader.skip(1) // LZW 最小码长
+      skipGifSubBlocks(reader)
+      frameCount++
+      const delayMs = pendingDelay <= 1 ? 100 : pendingDelay * 10
+      durationMs += clamp(delayMs, 20, 60000)
+      pendingDelay = 0
+    }
+
+    if (frameCount === 0) throw new Error('GIF has no frames')
+    const meta = {
+      durationMs: Math.max(100, Math.round(durationMs)),
+      frameCount,
+      mtimeMs: stat.mtimeMs,
+      size: stat.size,
+    }
+    gifMetaCache.set(filePath, meta)
+    return meta
+  } finally {
+    reader.close()
+  }
+}
+
+function agentGifDirectories(agent, state) {
+  const root = path.join(__dirname, 'assets', 'agent-gifs')
+  return [
+    path.join(root, state + '_' + agent),
+    path.join(root, 'common', state),
+  ]
+}
+
+function resolveAgentGifAssets(rawAgent, rawState) {
+  const agent = AGENT_IDS.includes(rawAgent) ? rawAgent : 'codex'
+  const requestedState = AGENT_STATES.includes(rawState) ? rawState : 'idle'
+  const candidates = [requestedState].concat(AGENT_STATE_FALLBACKS[requestedState] || [])
+  if (!candidates.includes('idle')) candidates.push('idle')
+
+  for (const state of [...new Set(candidates)]) {
+    for (const dir of agentGifDirectories(agent, state)) {
+      let entries
+      try {
+        entries = fs.readdirSync(dir, { withFileTypes: true })
+      } catch {
+        continue
+      }
+      const files = entries
+        .filter((entry) => entry.isFile() && /\.gif$/i.test(entry.name))
+        .map((entry) => path.join(dir, entry.name))
+        .sort((a, b) => a.localeCompare(b))
+      if (files.length === 0) continue
+
+      const assets = files.map((filePath) => {
+        let meta
+        try {
+          meta = readGifMetadata(filePath)
+        } catch (err) {
+          console.error('[whale-pet] GIF metadata failed:', filePath, err)
+          meta = { durationMs: 3200, frameCount: 0, size: 0 }
+        }
+        return {
+          name: path.basename(filePath),
+          url: pathToFileURL(filePath).href,
+          durationMs: meta.durationMs,
+          frameCount: meta.frameCount,
+          size: meta.size,
+        }
+      })
+      return {
+        agent,
+        requestedState,
+        state,
+        fallback: state !== requestedState,
+        directory: path.relative(path.join(__dirname, 'assets', 'agent-gifs'), dir).replace(/\\/g, '/'),
+        assets,
+      }
+    }
+  }
+  return { agent, requestedState, state: requestedState, fallback: false, directory: '', assets: [] }
+}
+
+function normalizeAgentId(value) {
+  return AGENT_IDS.includes(value) ? value : 'codex'
+}
+
+function normalizeAgentState(value) {
+  return AGENT_STATES.includes(value) ? value : 'idle'
+}
+
+function compactAgentDetail(value) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim()
+  return text.length > CODEX_DETAIL_LIMIT ? text.slice(0, CODEX_DETAIL_LIMIT - 1) + '…' : text
+}
+
+function codexHomePath() {
+  const configured = String(process.env.CODEX_HOME || '').trim()
+  return configured || path.join(os.homedir(), '.codex')
+}
+
+function codexConfigPath() {
+  return path.join(codexHomePath(), 'config.toml')
+}
+
+function codexHooksPath() {
+  return path.join(codexHomePath(), 'hooks.json')
+}
+
+function codexHookScriptPath() {
+  return path.join(app.getPath('userData'), CODEX_HOOK_MARKER)
+}
+
+function codexLegacyHookScriptPath() {
+  return path.join(app.getPath('userData'), CODEX_HOOK_LEGACY_MARKER)
+}
+
+function codexHookEventPath() {
+  return path.join(app.getPath('userData'), 'agent-events.jsonl')
+}
+
+function codexHookInstallStatePath() {
+  return path.join(app.getPath('userData'), 'codex-hook-state.json')
+}
+
+function readTextIfExists(filePath) {
+  try {
+    return fs.readFileSync(filePath, 'utf8')
+  } catch {
+    return ''
+  }
+}
+
+function readCodexHookInstallState() {
+  try {
+    const value = readJsonObject(codexHookInstallStatePath(), true)
+    return value && typeof value === 'object' && !Array.isArray(value) ? value : {}
+  } catch {
+    return {}
+  }
+}
+
+function writeCodexHookInstallState() {
+  const statePath = codexHookInstallStatePath()
+  if (fs.existsSync(statePath)) return
+  const backupPath = codexConfigPath() + '.deepseek-whale-pet.bak'
+  const source = fs.existsSync(backupPath)
+    ? readTextIfExists(backupPath)
+    : readTextIfExists(codexConfigPath())
+  const section = readTomlFeaturesSection(source)
+  const state = {
+    version: 1,
+    installedAt: Date.now(),
+    configHadFeaturesSection: section.hasFeatures,
+    configHooksSetting: section.hooksSetting,
+  }
+  fs.mkdirSync(path.dirname(statePath), { recursive: true })
+  fs.writeFileSync(statePath, JSON.stringify(state, null, 2) + '\n', 'utf8')
+}
+
+function backupFileOnce(filePath) {
+  if (!fs.existsSync(filePath)) return ''
+  const backupPath = filePath + '.deepseek-whale-pet.bak'
+  try {
+    if (!fs.existsSync(backupPath)) fs.copyFileSync(filePath, backupPath)
+    return backupPath
+  } catch (err) {
+    console.error('[whale-pet] Codex config backup failed:', err)
+    return ''
+  }
+}
+
+function readJsonObject(filePath, allowMissing) {
+  if (!fs.existsSync(filePath)) {
+    if (allowMissing) return {}
+    throw new Error('文件不存在：' + filePath)
+  }
+  const text = fs.readFileSync(filePath, 'utf8').replace(/^\uFEFF/, '').trim()
+  if (!text) return {}
+  const value = JSON.parse(text)
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('JSON 顶层不是对象：' + filePath)
+  }
+  return value
+}
+
+function readTomlFeaturesSection(text) {
+  const lines = String(text || '').split(/\r?\n/)
+  let inFeatures = false
+  let hasFeatures = false
+  let hooksSetting = null
+  for (const line of lines) {
+    const trimmed = line.trim()
+    if (/^\[[^\]]+\]\s*(?:#.*)?$/.test(trimmed)) {
+      inFeatures = /^\[features\]\s*(?:#.*)?$/i.test(trimmed)
+      if (inFeatures) hasFeatures = true
+      continue
+    }
+    if (!inFeatures) continue
+    const match = trimmed.match(/^hooks\s*=\s*(true|false)\b/i)
+    if (match) hooksSetting = match[1].toLowerCase() === 'true'
+  }
+  return { hasFeatures, hooksSetting }
+}
+
+function tomlFeaturesHooksEnabled(text) {
+  return readTomlFeaturesSection(text).hooksSetting === true
+}
+
+function setTomlFeaturesHooks(enabled) {
+  const filePath = codexConfigPath()
+  const exists = fs.existsSync(filePath)
+  if (!exists && !enabled) return
+  const source = readTextIfExists(filePath)
+  const lines = source ? source.split(/\r?\n/) : []
+  let featuresIndex = -1
+  let sectionEnd = lines.length
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = lines[i].trim()
+    if (!/^\[[^\]]+\]\s*(?:#.*)?$/.test(trimmed)) continue
+    if (featuresIndex >= 0) {
+      sectionEnd = i
+      break
+    }
+    if (/^\[features\]\s*(?:#.*)?$/i.test(trimmed)) featuresIndex = i
+  }
+
+  if (featuresIndex < 0) {
+    if (!enabled) return
+    while (lines.length && !lines[lines.length - 1].trim()) lines.pop()
+    if (lines.length) lines.push('')
+    lines.push('[features]')
+    lines.push('hooks = true')
+  } else {
+    let hookIndex = -1
+    for (let i = featuresIndex + 1; i < sectionEnd; i++) {
+      if (/^\s*hooks\s*=/.test(lines[i])) {
+        hookIndex = i
+        break
+      }
+    }
+    if (hookIndex >= 0) lines[hookIndex] = 'hooks = ' + (enabled ? 'true' : 'false')
+    else if (enabled) lines.splice(featuresIndex + 1, 0, 'hooks = true')
+    else return
+  }
+  fs.mkdirSync(path.dirname(filePath), { recursive: true })
+  fs.writeFileSync(filePath, lines.join('\r\n').replace(/\s*$/, '') + '\r\n', 'utf8')
+}
+
+function removeTomlFeaturesHooks(removeEmptyFeaturesSection) {
+  const filePath = codexConfigPath()
+  if (!fs.existsSync(filePath)) return
+  const lines = readTextIfExists(filePath).split(/\r?\n/)
+  let featuresIndex = -1
+  let sectionEnd = lines.length
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = lines[i].trim()
+    if (!/^\[[^\]]+\]\s*(?:#.*)?$/.test(trimmed)) continue
+    if (featuresIndex >= 0) {
+      sectionEnd = i
+      break
+    }
+    if (/^\[features\]\s*(?:#.*)?$/i.test(trimmed)) featuresIndex = i
+  }
+  if (featuresIndex < 0) return
+
+  let hookIndex = -1
+  for (let i = featuresIndex + 1; i < sectionEnd; i++) {
+    if (/^\s*hooks\s*=/.test(lines[i])) {
+      hookIndex = i
+      break
+    }
+  }
+  if (hookIndex >= 0) {
+    lines.splice(hookIndex, 1)
+    sectionEnd--
+  }
+
+  if (removeEmptyFeaturesSection) {
+    const hasRemainingSectionContent = lines
+      .slice(featuresIndex + 1, sectionEnd)
+      .some((line) => line.trim())
+    if (!hasRemainingSectionContent) {
+      let removeEnd = sectionEnd
+      if (removeEnd < lines.length && !lines[removeEnd].trim()) removeEnd++
+      lines.splice(featuresIndex, removeEnd - featuresIndex)
+    }
+  }
+  fs.writeFileSync(filePath, lines.join('\r\n').replace(/\s*$/, '') + '\r\n', 'utf8')
+}
+
+function codexHookGroup(event) {
+  const markerPath = codexHookScriptPath()
+  const command = 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + markerPath + '"'
+  const hook = {
+    type: 'command',
+    command,
+    commandWindows: command,
+    timeout: 10,
+  }
+  const group = {
+    hooks: [hook],
+  }
+  if (event === 'PreToolUse' || event === 'PermissionRequest' || event === 'PostToolUse') {
+    group.matcher = '*'
+  }
+  return group
+}
+
+function isWhalePetHookGroup(group) {
+  try {
+    const serialized = JSON.stringify(group)
+    return [codexHookScriptPath(), codexLegacyHookScriptPath()].some((filePath) => {
+      const encodedPath = JSON.stringify(filePath).slice(1, -1)
+      return serialized.includes(encodedPath)
+    })
+  } catch {
+    return false
+  }
+}
+
+function countInstalledCodexHookEvents(root) {
+  const hooks = root && root.hooks && typeof root.hooks === 'object' ? root.hooks : {}
+  return CODEX_HOOK_EVENTS.filter((event) => {
+    const groups = Array.isArray(hooks[event]) ? hooks[event] : []
+    return groups.some(isWhalePetHookGroup)
+  }).length
+}
+
+function countAllCodexHookEvents(root) {
+  const hooks = root && root.hooks && typeof root.hooks === 'object' ? root.hooks : {}
+  return Object.keys(hooks).filter((event) => Array.isArray(hooks[event]) && hooks[event].length > 0).length
+}
+
+function mergeCodexHooks(enabled) {
+  const filePath = codexHooksPath()
+  if (!fs.existsSync(filePath) && !enabled) return
+  const root = readJsonObject(filePath, true)
+  if (!root.hooks || typeof root.hooks !== 'object' || Array.isArray(root.hooks)) root.hooks = {}
+
+  for (const event of CODEX_HOOK_EVENTS) {
+    const current = Array.isArray(root.hooks[event]) ? root.hooks[event] : []
+    const kept = current.filter((group) => !isWhalePetHookGroup(group))
+    if (enabled) kept.push(codexHookGroup(event))
+    if (kept.length) root.hooks[event] = kept
+    else delete root.hooks[event]
+  }
+
+  fs.mkdirSync(path.dirname(filePath), { recursive: true })
+  fs.writeFileSync(filePath, JSON.stringify(root, null, 2) + '\n', 'utf8')
+}
+
+function codexHookInstallStatus() {
+  let root = {}
+  let parseError = ''
+  try {
+    root = readJsonObject(codexHooksPath(), true)
+  } catch (err) {
+    parseError = err.message || String(err)
+  }
+  const installedEvents = parseError ? 0 : countInstalledCodexHookEvents(root)
+  let featureHooks = false
+  try {
+    featureHooks = tomlFeaturesHooksEnabled(readTextIfExists(codexConfigPath()))
+  } catch (err) {
+    parseError = parseError || err.message || String(err)
+  }
+  const installed = installedEvents === CODEX_HOOK_EVENTS.length && featureHooks
+  return {
+    installed,
+    installedEvents,
+    totalEvents: CODEX_HOOK_EVENTS.length,
+    featureHooks,
+    hooksPath: codexHooksPath(),
+    configPath: codexConfigPath(),
+    eventPath: codexHookEventPath(),
+    error: codexHookLastError || parseError,
+  }
+}
+
+function codexHookStatusSnapshot() {
+  const status = codexHookInstallStatus()
+  return {
+    ...status,
+    detected: fs.existsSync(codexHomePath()),
+    detectedPath: codexHomePath(),
+    enabled: !!cfg.codexHookEnabled,
+    desired: !!cfg.agentAnimationEnabled && !!cfg.codexHookEnabled,
+    watcherActive: !!agentRuntimeStatus.hookWatcherActive,
+    watcherPath: agentRuntimeStatus.hookPath || '',
+  }
+}
+
+function writeCodexHookScript() {
+  const filePath = codexHookScriptPath()
+  const logPath = codexHookEventPath().replace(/'/g, "''")
+  const script = [
+    '$ErrorActionPreference = "SilentlyContinue"',
+    `$LogPath = '${logPath}'`,
+    '$stdin = [Console]::OpenStandardInput()',
+    '$memory = New-Object System.IO.MemoryStream',
+    '$stdin.CopyTo($memory)',
+    '$payloadBytes = $memory.ToArray()',
+    'if ($payloadBytes.Length -eq 0) { exit 0 }',
+    '$payloadBase64 = [Convert]::ToBase64String($payloadBytes)',
+    '$json = \'{"recordedAt":\' + [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() + \',"payloadBase64":"\' + $payloadBase64 + \'"}\'',
+    '$dir = [System.IO.Path]::GetDirectoryName($LogPath)',
+    'if ($dir -and -not [System.IO.Directory]::Exists($dir)) { [System.IO.Directory]::CreateDirectory($dir) | Out-Null }',
+    '$utf8 = New-Object System.Text.UTF8Encoding($false)',
+    '[System.IO.File]::AppendAllText($LogPath, $json + [Environment]::NewLine, $utf8)',
+    'exit 0',
+    '',
+  ].join('\r\n')
+  fs.mkdirSync(path.dirname(filePath), { recursive: true })
+  fs.writeFileSync(filePath, '\uFEFF' + script, 'utf8')
+}
+
+function installCodexHook() {
+  try {
+    backupFileOnce(codexConfigPath())
+    backupFileOnce(codexHooksPath())
+    writeCodexHookInstallState()
+    writeCodexHookScript()
+    mergeCodexHooks(true)
+    setTomlFeaturesHooks(true)
+    codexHookLastError = ''
+  } catch (err) {
+    codexHookLastError = err.message || String(err)
+    console.error('[whale-pet] install Codex hook failed:', err)
+  }
+  updateAgentWatcher()
+  broadcastAgentStatus()
+  return { ok: !codexHookLastError, error: codexHookLastError, ...codexHookStatusSnapshot() }
+}
+
+function uninstallCodexHook() {
+  try {
+    backupFileOnce(codexConfigPath())
+    backupFileOnce(codexHooksPath())
+    const installState = readCodexHookInstallState()
+    mergeCodexHooks(false)
+    let root = {}
+    try {
+      root = readJsonObject(codexHooksPath(), true)
+    } catch {
+      root = {}
+    }
+    const hasOtherHooks = countAllCodexHookEvents(root) > 0
+    const hadFeaturesSection = installState.configHadFeaturesSection === true
+    const originalHooksSetting = installState.configHooksSetting
+    if (hasOtherHooks || originalHooksSetting === true) {
+      setTomlFeaturesHooks(true)
+    } else if (originalHooksSetting === false) {
+      setTomlFeaturesHooks(false)
+    } else {
+      removeTomlFeaturesHooks(!hadFeaturesSection)
+    }
+    try {
+      fs.rmSync(codexHookInstallStatePath(), { force: true })
+    } catch {
+      // The state file is non-critical after the config has been restored.
+    }
+    codexHookLastError = ''
+  } catch (err) {
+    codexHookLastError = err.message || String(err)
+    console.error('[whale-pet] uninstall Codex hook failed:', err)
+  }
+  updateAgentWatcher()
+  broadcastAgentStatus()
+  return { ok: !codexHookLastError, error: codexHookLastError, ...codexHookStatusSnapshot() }
+}
+
+function syncCodexHookInstallation() {
+  const want = !!cfg.agentAnimationEnabled && !!cfg.codexHookEnabled
+  const status = codexHookInstallStatus()
+  if (want && !status.installed) installCodexHook()
+  else if (want) {
+    try {
+      // Keep the locally generated hook script current even when hooks.json is already installed.
+      writeCodexHookScript()
+      codexHookLastError = ''
+    } catch (err) {
+      codexHookLastError = err.message || String(err)
+      console.error('[whale-pet] refresh Codex hook script failed:', err)
+    }
+  }
+  else if (!want && status.installedEvents > 0) uninstallCodexHook()
+}
+
+function claudeHomePath() {
+  const configured = String(process.env.CLAUDE_CONFIG_DIR || '').trim()
+  return configured || path.join(os.homedir(), '.claude')
+}
+
+function claudeSettingsPath() {
+  return path.join(claudeHomePath(), 'settings.json')
+}
+
+function claudeHookScriptPath() {
+  return path.join(app.getPath('userData'), CLAUDE_HOOK_MARKER)
+}
+
+function claudeHookEventPath() {
+  return path.join(app.getPath('userData'), 'claude-agent-events.jsonl')
+}
+
+function claudeHookGroup(event) {
+  const markerPath = claudeHookScriptPath()
+  const command = 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + markerPath + '"'
+  const group = {
+    hooks: [
+      {
+        type: 'command',
+        command,
+        timeout: 10,
+      },
+    ],
+  }
+  if (event === 'PreToolUse' || event === 'PostToolUse' || event === 'PostToolUseFailure' ||
+      event === 'PermissionRequest' ||
+      event === 'Notification' || event === 'SubagentStart' || event === 'SubagentStop') {
+    group.matcher = '*'
+  }
+  return group
+}
+
+function isWhaleClaudeHookGroup(group) {
+  try {
+    const encodedPath = JSON.stringify(claudeHookScriptPath()).slice(1, -1)
+    return JSON.stringify(group).includes(encodedPath)
+  } catch {
+    return false
+  }
+}
+
+function countInstalledClaudeHookEvents(root) {
+  const hooks = root && root.hooks && typeof root.hooks === 'object' ? root.hooks : {}
+  return CLAUDE_HOOK_EVENTS.filter((event) => {
+    const groups = Array.isArray(hooks[event]) ? hooks[event] : []
+    return groups.some(isWhaleClaudeHookGroup)
+  }).length
+}
+
+function mergeClaudeHooks(enabled) {
+  const filePath = claudeSettingsPath()
+  if (!fs.existsSync(filePath) && !enabled) return
+  const root = readJsonObject(filePath, true)
+  if (!root.hooks || typeof root.hooks !== 'object' || Array.isArray(root.hooks)) root.hooks = {}
+
+  for (const event of CLAUDE_HOOK_EVENTS) {
+    const current = Array.isArray(root.hooks[event]) ? root.hooks[event] : []
+    const kept = current.filter((group) => !isWhaleClaudeHookGroup(group))
+    if (enabled) kept.push(claudeHookGroup(event))
+    if (kept.length) root.hooks[event] = kept
+    else delete root.hooks[event]
+  }
+  if (!enabled && Object.keys(root.hooks).length === 0) delete root.hooks
+
+  fs.mkdirSync(path.dirname(filePath), { recursive: true })
+  fs.writeFileSync(filePath, JSON.stringify(root, null, 2) + '\n', 'utf8')
+}
+
+function claudeHookInstallStatus() {
+  let root = {}
+  let parseError = ''
+  try {
+    root = readJsonObject(claudeSettingsPath(), true)
+  } catch (err) {
+    parseError = err.message || String(err)
+  }
+  const installedEvents = parseError ? 0 : countInstalledClaudeHookEvents(root)
+  return {
+    installed: installedEvents === CLAUDE_HOOK_EVENTS.length,
+    installedEvents,
+    totalEvents: CLAUDE_HOOK_EVENTS.length,
+    settingsPath: claudeSettingsPath(),
+    eventPath: claudeHookEventPath(),
+    error: claudeHookLastError || parseError,
+  }
+}
+
+function claudeHookStatusSnapshot() {
+  const status = claudeHookInstallStatus()
+  return {
+    ...status,
+    detected: fs.existsSync(claudeHomePath()),
+    detectedPath: claudeHomePath(),
+    enabled: !!cfg.claudeHookEnabled,
+    desired: !!cfg.agentAnimationEnabled && !!cfg.claudeHookEnabled,
+    watcherActive: !!agentRuntimeStatus.claudeHookWatcherActive,
+    watcherPath: agentRuntimeStatus.claudeHookPath || '',
+  }
+}
+
+function writeClaudeHookScript() {
+  const filePath = claudeHookScriptPath()
+  const logPath = claudeHookEventPath().replace(/'/g, "''")
+  const script = [
+    '$ErrorActionPreference = "SilentlyContinue"',
+    `$LogPath = '${logPath}'`,
+    '$stdin = [Console]::OpenStandardInput()',
+    '$memory = New-Object System.IO.MemoryStream',
+    '$stdin.CopyTo($memory)',
+    '$payloadBytes = $memory.ToArray()',
+    'if ($payloadBytes.Length -eq 0) { exit 0 }',
+    '$payloadBase64 = [Convert]::ToBase64String($payloadBytes)',
+    '$json = \'{"recordedAt":\' + [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() + \',"payloadBase64":"\' + $payloadBase64 + \'"}\'',
+    '$dir = [System.IO.Path]::GetDirectoryName($LogPath)',
+    'if ($dir -and -not [System.IO.Directory]::Exists($dir)) { [System.IO.Directory]::CreateDirectory($dir) | Out-Null }',
+    '$utf8 = New-Object System.Text.UTF8Encoding($false)',
+    '[System.IO.File]::AppendAllText($LogPath, $json + [Environment]::NewLine, $utf8)',
+    'exit 0',
+    '',
+  ].join('\r\n')
+  fs.mkdirSync(path.dirname(filePath), { recursive: true })
+  fs.writeFileSync(filePath, '\uFEFF' + script, 'utf8')
+}
+
+function installClaudeHook() {
+  try {
+    backupFileOnce(claudeSettingsPath())
+    writeClaudeHookScript()
+    mergeClaudeHooks(true)
+    claudeHookLastError = ''
+  } catch (err) {
+    claudeHookLastError = err.message || String(err)
+    console.error('[whale-pet] install Claude hook failed:', err)
+  }
+  updateAgentWatcher()
+  broadcastAgentStatus()
+  return { ok: !claudeHookLastError, error: claudeHookLastError, ...claudeHookStatusSnapshot() }
+}
+
+function uninstallClaudeHook() {
+  try {
+    backupFileOnce(claudeSettingsPath())
+    mergeClaudeHooks(false)
+    claudeHookLastError = ''
+  } catch (err) {
+    claudeHookLastError = err.message || String(err)
+    console.error('[whale-pet] uninstall Claude hook failed:', err)
+  }
+  updateAgentWatcher()
+  broadcastAgentStatus()
+  return { ok: !claudeHookLastError, error: claudeHookLastError, ...claudeHookStatusSnapshot() }
+}
+
+function syncClaudeHookInstallation() {
+  const want = !!cfg.agentAnimationEnabled && !!cfg.claudeHookEnabled
+  const status = claudeHookInstallStatus()
+  if (want && !status.installed) installClaudeHook()
+  else if (want) {
+    try {
+      writeClaudeHookScript()
+      claudeHookLastError = ''
+    } catch (err) {
+      claudeHookLastError = err.message || String(err)
+      console.error('[whale-pet] refresh Claude hook script failed:', err)
+    }
+  }
+  else if (!want && status.installedEvents > 0) uninstallClaudeHook()
+}
+
+function harnessHomePath() {
+  const configured = String(process.env.DSH_HOME || '').trim()
+  return configured || path.join(os.homedir(), '.dsh')
+}
+
+function harnessProfilePath() {
+  return path.join(harnessHomePath(), 'profiles', HARNESS_PROFILE)
+}
+
+function harnessPatchPath() {
+  return path.join(harnessProfilePath(), 'cordis.patch.yml')
+}
+
+function harnessNodeModulesPath() {
+  return path.join(harnessProfilePath(), 'node_modules')
+}
+
+function harnessBridgeLinkPath() {
+  return path.join(harnessNodeModulesPath(), HARNESS_BRIDGE_PACKAGE)
+}
+
+function harnessPluginInstallPath() {
+  return path.join(app.getPath('userData'), 'integrations', 'deepseek-harness')
+}
+
+function harnessPluginSourcePath() {
+  const candidates = []
+  if (process.resourcesPath) {
+    candidates.push(path.join(process.resourcesPath, 'app.asar.unpacked', 'integrations', 'deepseek-harness'))
+    candidates.push(path.join(process.resourcesPath, 'integrations', 'deepseek-harness'))
+  }
+  const appPath = typeof app.getAppPath === 'function' ? app.getAppPath() : __dirname
+  candidates.push(path.join(appPath, 'integrations', 'deepseek-harness'))
+  candidates.push(path.join(__dirname, 'integrations', 'deepseek-harness'))
+  return candidates.find((candidate) => fs.existsSync(path.join(candidate, 'index.js'))) || candidates[candidates.length - 1]
+}
+
+function harnessHookEventPath() {
+  return path.join(app.getPath('userData'), 'harness-agent-events.jsonl')
+}
+
+function harnessPatchBlock() {
+  return [
+    HARNESS_PATCH_BEGIN,
+    '- insert:',
+    '    - id: ' + HARNESS_BRIDGE_ID,
+    '      name: ' + HARNESS_BRIDGE_PACKAGE,
+    HARNESS_PATCH_END,
+    '',
+  ].join('\r\n')
+}
+
+function removeHarnessPatchBlock(text) {
+  const source = String(text || '')
+  const begin = source.indexOf(HARNESS_PATCH_BEGIN)
+  if (begin < 0) return source
+  const endMarker = source.indexOf(HARNESS_PATCH_END, begin)
+  if (endMarker < 0) return source
+  let end = endMarker + HARNESS_PATCH_END.length
+  if (source.slice(end, end + 2) === '\r\n') end += 2
+  else if (source.charAt(end) === '\n') end += 1
+  return source.slice(0, begin).replace(/\s+$/, '') + (source.slice(end).trim() ? '\n' + source.slice(end).replace(/^\s+/, '') : '')
+}
+
+function harnessPatchHasEntries(text) {
+  return String(text || '').split(/\r?\n/).some((line) => {
+    const trimmed = line.trim()
+    return trimmed && !trimmed.startsWith('#')
+  })
+}
+
+function mergeHarnessPatch(enabled) {
+  const filePath = harnessPatchPath()
+  if (!fs.existsSync(filePath) && !enabled) return
+  const source = readTextIfExists(filePath)
+  const withoutBlock = removeHarnessPatchBlock(source).replace(/\s*$/, '')
+  let next = ''
+
+  if (enabled) {
+    const block = harnessPatchBlock().replace(/\s*$/, '')
+    if (/^\s*\[\]\s*$/m.test(withoutBlock)) {
+      next = withoutBlock.replace(/^\s*\[\]\s*$/m, block)
+    } else if (withoutBlock) {
+      next = withoutBlock + '\r\n' + block
+    } else {
+      next = block
+    }
+  } else {
+    next = harnessPatchHasEntries(withoutBlock)
+      ? withoutBlock
+      : (withoutBlock ? withoutBlock + '\r\n' : '') + '[]'
+  }
+
+  fs.mkdirSync(path.dirname(filePath), { recursive: true })
+  fs.writeFileSync(filePath, next.replace(/\s*$/, '') + '\r\n', 'utf8')
+}
+
+function normalizeComparablePath(value) {
+  const resolved = path.resolve(String(value || ''))
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved
+}
+
+function readHarnessJunctionTarget() {
+  const linkPath = harnessBridgeLinkPath()
+  try {
+    if (!fs.lstatSync(linkPath).isSymbolicLink()) return ''
+    const target = fs.readlinkSync(linkPath)
+    return path.resolve(path.dirname(linkPath), target)
+  } catch {
+    return ''
+  }
+}
+
+function ensureHarnessJunction() {
+  const linkPath = harnessBridgeLinkPath()
+  const installPath = harnessPluginInstallPath()
+  fs.mkdirSync(path.dirname(linkPath), { recursive: true })
+
+  try {
+    const stat = fs.lstatSync(linkPath)
+    if (stat.isSymbolicLink()) {
+      const currentTarget = readHarnessJunctionTarget()
+      if (normalizeComparablePath(currentTarget) === normalizeComparablePath(installPath)) return
+      fs.unlinkSync(linkPath)
+    } else {
+      throw new Error('DSH 插件目标已存在且不是本应用创建的 junction：' + linkPath)
+    }
+  } catch (err) {
+    if (!err || err.code !== 'ENOENT') throw err
+  }
+
+  fs.symlinkSync(installPath, linkPath, 'junction')
+}
+
+function removeHarnessJunction() {
+  const linkPath = harnessBridgeLinkPath()
+  try {
+    const stat = fs.lstatSync(linkPath)
+    if (!stat.isSymbolicLink()) return
+    const target = readHarnessJunctionTarget()
+    if (normalizeComparablePath(target) !== normalizeComparablePath(harnessPluginInstallPath())) return
+    fs.unlinkSync(linkPath)
+  } catch (err) {
+    if (!err || err.code !== 'ENOENT') throw err
+  }
+}
+
+function copyHarnessPluginFiles() {
+  const source = harnessPluginSourcePath()
+  const target = harnessPluginInstallPath()
+  if (!fs.existsSync(path.join(source, 'index.js'))) {
+    throw new Error('找不到 Harness bridge 插件源码：' + source)
+  }
+  fs.rmSync(target, { recursive: true, force: true })
+  fs.mkdirSync(path.dirname(target), { recursive: true })
+  fs.cpSync(source, target, { recursive: true, force: true })
+}
+
+function harnessHookInstallStatus() {
+  let installed = false
+  let installedEvents = 0
+  let parseError = ''
+  try {
+    const patchText = readTextIfExists(harnessPatchPath())
+    installedEvents = patchText.includes(HARNESS_PATCH_BEGIN) && patchText.includes(HARNESS_BRIDGE_PACKAGE) ? 1 : 0
+    const pluginReady = fs.existsSync(path.join(harnessPluginInstallPath(), 'index.js'))
+    const linkReady = normalizeComparablePath(readHarnessJunctionTarget()) === normalizeComparablePath(harnessPluginInstallPath())
+    installed = installedEvents === 1 && pluginReady && linkReady
+  } catch (err) {
+    parseError = err.message || String(err)
+  }
+  return {
+    installed,
+    installedEvents,
+    totalEvents: 1,
+    pluginPath: harnessPluginInstallPath(),
+    sourcePath: harnessPluginSourcePath(),
+    profilePath: harnessProfilePath(),
+    patchPath: harnessPatchPath(),
+    linkPath: harnessBridgeLinkPath(),
+    eventPath: harnessHookEventPath(),
+    error: harnessHookLastError || parseError,
+  }
+}
+
+function harnessHookStatusSnapshot() {
+  const status = harnessHookInstallStatus()
+  return {
+    ...status,
+    detected: fs.existsSync(harnessHomePath()),
+    detectedPath: harnessHomePath(),
+    enabled: !!cfg.harnessHookEnabled,
+    desired: !!cfg.agentAnimationEnabled && !!cfg.harnessHookEnabled,
+    watcherActive: !!agentRuntimeStatus.harnessHookWatcherActive,
+    watcherPath: agentRuntimeStatus.harnessHookPath || '',
+  }
+}
+
+function installHarnessHook() {
+  try {
+    backupFileOnce(harnessPatchPath())
+    copyHarnessPluginFiles()
+    ensureHarnessJunction()
+    mergeHarnessPatch(true)
+    harnessHookLastError = ''
+  } catch (err) {
+    harnessHookLastError = err.message || String(err)
+    console.error('[whale-pet] install Harness bridge failed:', err)
+  }
+  updateAgentWatcher()
+  broadcastAgentStatus()
+  return { ok: !harnessHookLastError, error: harnessHookLastError, ...harnessHookStatusSnapshot() }
+}
+
+function uninstallHarnessHook() {
+  try {
+    backupFileOnce(harnessPatchPath())
+    mergeHarnessPatch(false)
+    removeHarnessJunction()
+    harnessHookLastError = ''
+  } catch (err) {
+    harnessHookLastError = err.message || String(err)
+    console.error('[whale-pet] uninstall Harness bridge failed:', err)
+  }
+  updateAgentWatcher()
+  broadcastAgentStatus()
+  return { ok: !harnessHookLastError, error: harnessHookLastError, ...harnessHookStatusSnapshot() }
+}
+
+function syncHarnessHookInstallation() {
+  const want = !!cfg.agentAnimationEnabled && !!cfg.harnessHookEnabled
+  const status = harnessHookInstallStatus()
+  if (want && !status.installed) installHarnessHook()
+  else if (want) {
+    try {
+      copyHarnessPluginFiles()
+      ensureHarnessJunction()
+      mergeHarnessPatch(true)
+      harnessHookLastError = ''
+    } catch (err) {
+      harnessHookLastError = err.message || String(err)
+      console.error('[whale-pet] refresh Harness bridge failed:', err)
+    }
+  }
+  else if (!want && status.installedEvents > 0) uninstallHarnessHook()
+}
+
+function harnessHookEventMapping(record) {
+  if (!record || typeof record !== 'object') return null
+  if (record.agent && record.agent !== 'harness') return null
+  const state = AGENT_STATES.includes(record.state) ? record.state : ''
+  if (!state) return null
+  return {
+    state,
+    event: String(record.event || ''),
+    detail: record.tool || record.reason || '',
+    session: String(record.session || ''),
+    seq: Number.isSafeInteger(Number(record.seq)) ? Number(record.seq) : '',
+    at: Number(record.at) || 0,
+  }
+}
+
+function handleHarnessHookLine(line) {
+  const text = line.toString('utf8').replace(/^\uFEFF/, '').replace(/\r$/, '').trim()
+  if (!text) return
+  let record
+  try {
+    record = JSON.parse(text)
+  } catch {
+    return
+  }
+  const mapped = harnessHookEventMapping(record)
+  if (!mapped) return
+  queueAgentEvent('harness', mapped.state, {
+    source: 'harness-bridge',
+    event: mapped.event,
+    detail: mapped.detail,
+    eventId: 'harness-bridge-' + mapped.session + '-' + mapped.seq + '-' + mapped.event + '-' + mapped.at,
+    force: mapped.state === 'done',
+  })
+}
+
+function consumeHarnessHookBytes(watcher, chunk) {
+  if (!chunk || chunk.length === 0) return
+  const data = watcher.partial.length ? Buffer.concat([watcher.partial, chunk]) : chunk
+  let start = 0
+  let newline = data.indexOf(0x0a, start)
+  while (newline >= 0) {
+    if (newline > start) handleHarnessHookLine(data.subarray(start, newline))
+    start = newline + 1
+    newline = data.indexOf(0x0a, start)
+  }
+  watcher.partial = start < data.length ? data.subarray(start) : Buffer.alloc(0)
+  if (watcher.partial.length > HARNESS_MAX_PENDING_BYTES) watcher.partial = Buffer.alloc(0)
+}
+
+function pollHarnessHookEvents() {
+  const watcher = harnessHookWatcher
+  if (!watcher || !watcher.active) return
+  let stat
+  try {
+    stat = fs.statSync(watcher.filePath)
+  } catch {
+    return
+  }
+  if (stat.size < watcher.offset) {
+    watcher.offset = 0
+    watcher.partial = Buffer.alloc(0)
+  }
+  if (stat.size <= watcher.offset) return
+
+  const buffer = Buffer.allocUnsafe(Math.min(HARNESS_TAIL_CHUNK_BYTES, stat.size - watcher.offset))
+  let fd = null
+  try {
+    fd = fs.openSync(watcher.filePath, 'r')
+    let position = watcher.offset
+    while (position < stat.size) {
+      const length = Math.min(buffer.length, stat.size - position)
+      const bytesRead = fs.readSync(fd, buffer, 0, length, position)
+      if (bytesRead <= 0) break
+      consumeHarnessHookBytes(watcher, buffer.subarray(0, bytesRead))
+      position += bytesRead
+    }
+    watcher.offset = position
+  } catch {
+    // Harness events are best effort; the next poll will retry.
+  } finally {
+    if (fd !== null) {
+      try { fs.closeSync(fd) } catch {}
+    }
+  }
+}
+
+function setHarnessHookWatcherStatus(active, filePath) {
+  agentRuntimeStatus = {
+    ...agentRuntimeStatus,
+    harnessHookWatcherActive: !!active,
+    harnessHookPath: filePath || '',
+  }
+  broadcastAgentStatus()
+}
+
+function stopHarnessHookWatcher() {
+  if (!harnessHookWatcher) return
+  if (harnessHookWatcher.timer) clearInterval(harnessHookWatcher.timer)
+  harnessHookWatcher = null
+  setHarnessHookWatcherStatus(false, '')
+}
+
+function startHarnessHookWatcher() {
+  if (harnessHookWatcher && harnessHookWatcher.active) return
+  const filePath = harnessHookEventPath()
+  let offset = 0
+  try {
+    const stat = fs.statSync(filePath)
+    if (stat.size > HARNESS_MAX_PENDING_BYTES) {
+      fs.truncateSync(filePath, 0)
+      offset = 0
+    } else {
+      offset = stat.size
+    }
+  } catch {
+    offset = 0
+  }
+  harnessHookWatcher = {
+    active: true,
+    timer: null,
+    filePath,
+    offset,
+    partial: Buffer.alloc(0),
+  }
+  harnessHookWatcher.timer = setInterval(pollHarnessHookEvents, HARNESS_HOOK_WATCH_INTERVAL_MS)
+  setHarnessHookWatcherStatus(true, filePath)
+}
+
+function agentStatusSnapshot() {
+  const updatedAt = Number(agentRuntimeStatus.updatedAt) || 0
+  const selectedAgent = normalizeAgentId(cfg.agentType)
+  let hookEnabled = !!cfg.codexHookEnabled
+  let hookWatcherActive = !!agentRuntimeStatus.hookWatcherActive
+  let hookPath = agentRuntimeStatus.hookPath || ''
+  let watcherActive = !!agentRuntimeStatus.watcherActive
+  let watcherPath = agentRuntimeStatus.watcherPath || ''
+  if (selectedAgent === 'claudecode') {
+    hookEnabled = !!cfg.claudeHookEnabled
+    hookWatcherActive = !!agentRuntimeStatus.claudeHookWatcherActive
+    hookPath = agentRuntimeStatus.claudeHookPath || ''
+    watcherActive = !!agentRuntimeStatus.claudeHookWatcherActive
+    watcherPath = agentRuntimeStatus.claudeHookPath || ''
+  } else if (selectedAgent === 'harness') {
+    hookEnabled = !!cfg.harnessHookEnabled
+    hookWatcherActive = !!agentRuntimeStatus.harnessHookWatcherActive
+    hookPath = agentRuntimeStatus.harnessHookPath || ''
+    watcherActive = !!agentRuntimeStatus.harnessHookWatcherActive
+    watcherPath = agentRuntimeStatus.harnessHookPath || ''
+  }
+  return {
+    enabled: !!cfg.agentAnimationEnabled,
+    selectedAgent,
+    connected: updatedAt > 0 && Date.now() - updatedAt < AGENT_STATUS_FRESH_MS,
+    source: agentRuntimeStatus.source,
+    agent: agentRuntimeStatus.agent,
+    state: agentRuntimeStatus.state,
+    event: agentRuntimeStatus.event,
+    detail: agentRuntimeStatus.detail,
+    updatedAt,
+    watcherActive,
+    watcherPath,
+    hookEnabled,
+    hookWatcherActive,
+    hookPath,
+  }
+}
+
+function broadcastAgentStatus() {
+  if (settingsWin && !settingsWin.isDestroyed()) {
+    settingsWin.webContents.send('pet:agent-status', agentStatusSnapshot())
+  }
+}
+
+function sendAgentState(rawAgent, rawState, options = {}) {
+  const timestamp = Date.now()
+  const payload = {
+    agent: normalizeAgentId(rawAgent),
+    state: normalizeAgentState(rawState),
+    timestamp,
+    eventId: String(options.eventId || ''),
+    force: !!options.force,
+    source: String(options.source || ''),
+    event: String(options.event || ''),
+    detail: compactAgentDetail(options.detail),
+  }
+  latestAgentEvent = payload
+  agentRuntimeStatus = {
+    ...agentRuntimeStatus,
+    source: payload.source,
+    agent: payload.agent,
+    state: payload.state,
+    event: payload.event,
+    detail: payload.detail,
+    updatedAt: timestamp,
+  }
+  broadcastAgentStatus()
+  if (petRendererReady && petWin && !petWin.isDestroyed()) {
+    petWin.webContents.send('pet:agent-state', payload)
+  }
+  return payload
+}
+
+function flushPendingAgentEvent() {
+  if (!latestAgentEvent || !petRendererReady || !petWin || petWin.isDestroyed()) return
+  petWin.webContents.send('pet:agent-state', latestAgentEvent)
+}
+
+function nextAgentEventId(prefix) {
+  agentEventSeq++
+  return prefix + '-' + Date.now().toString(36) + '-' + agentEventSeq.toString(36)
+}
+
+function clearCodexDoneIdleTimer() {
+  if (!codexDoneIdleTimer) return
+  clearTimeout(codexDoneIdleTimer)
+  codexDoneIdleTimer = null
+}
+
+function clearClaudeDoneIdleTimer() {
+  if (!claudeDoneIdleTimer) return
+  clearTimeout(claudeDoneIdleTimer)
+  claudeDoneIdleTimer = null
+}
+
+function clearHarnessDoneIdleTimer() {
+  if (!harnessDoneIdleTimer) return
+  clearTimeout(harnessDoneIdleTimer)
+  harnessDoneIdleTimer = null
+}
+
+function clearAgentIdleToSleepTimer() {
+  if (agentIdleToSleepTimer) {
+    clearTimeout(agentIdleToSleepTimer)
+    agentIdleToSleepTimer = null
+  }
+  agentIdleToSleepAgent = ''
+}
+
+function scheduleAgentIdleToSleep(agent) {
+  const normalizedAgent = normalizeAgentId(agent)
+  if (!cfg.agentAnimationEnabled || normalizeAgentId(cfg.agentType) !== normalizedAgent) {
+    clearAgentIdleToSleepTimer()
+    return
+  }
+  if (agentIdleToSleepTimer && agentIdleToSleepAgent === normalizedAgent) return
+
+  clearAgentIdleToSleepTimer()
+  agentIdleToSleepAgent = normalizedAgent
+  agentIdleToSleepTimer = setTimeout(() => {
+    agentIdleToSleepTimer = null
+    if (!cfg.agentAnimationEnabled || normalizeAgentId(cfg.agentType) !== normalizedAgent) {
+      agentIdleToSleepAgent = ''
+      return
+    }
+    agentIdleToSleepAgent = ''
+    queueAgentEvent(normalizedAgent, 'sleep', {
+      source: normalizedAgent + '-idle-timeout',
+      event: 'idle-to-sleep',
+      detail: 'sleep-after-' + Math.round(AGENT_IDLE_TO_SLEEP_MS / 1000) + 's-idle',
+      force: true,
+    })
+  }, AGENT_IDLE_TO_SLEEP_MS)
+}
+
+function scheduleCodexIdleAfterDone() {
+  clearCodexDoneIdleTimer()
+  codexDoneIdleTimer = setTimeout(() => {
+    codexDoneIdleTimer = null
+    if (!cfg.agentAnimationEnabled || normalizeAgentId(cfg.agentType) !== 'codex') return
+    queueAgentEvent('codex', 'idle', {
+      source: 'codex-completion',
+      event: 'idle-after-stop',
+      detail: 'idle',
+      force: true,
+    })
+  }, CODEX_DONE_HOLD_MS)
+}
+
+function scheduleClaudeIdleAfterDone() {
+  clearClaudeDoneIdleTimer()
+  claudeDoneIdleTimer = setTimeout(() => {
+    claudeDoneIdleTimer = null
+    if (!cfg.agentAnimationEnabled || normalizeAgentId(cfg.agentType) !== 'claudecode') return
+    queueAgentEvent('claudecode', 'idle', {
+      source: 'claude-completion',
+      event: 'idle-after-stop',
+      detail: 'idle',
+      force: true,
+    })
+  }, CLAUDE_DONE_HOLD_MS)
+}
+
+function scheduleHarnessIdleAfterDone() {
+  clearHarnessDoneIdleTimer()
+  harnessDoneIdleTimer = setTimeout(() => {
+    harnessDoneIdleTimer = null
+    if (!cfg.agentAnimationEnabled || normalizeAgentId(cfg.agentType) !== 'harness') return
+    queueAgentEvent('harness', 'idle', {
+      source: 'harness-completion',
+      event: 'idle-after-stop',
+      detail: 'idle',
+      force: true,
+    })
+  }, HARNESS_DONE_HOLD_MS)
+}
+
+function queueAgentEvent(agent, state, options = {}) {
+  const normalizedAgent = normalizeAgentId(agent)
+  const normalizedState = normalizeAgentState(state)
+  if (normalizedAgent === 'codex') {
+    if (normalizedState === 'done') {
+      clearAgentIdleToSleepTimer()
+      scheduleCodexIdleAfterDone()
+    } else {
+      clearCodexDoneIdleTimer()
+    }
+  } else if (normalizedAgent === 'claudecode') {
+    if (normalizedState === 'done') {
+      clearAgentIdleToSleepTimer()
+      scheduleClaudeIdleAfterDone()
+    } else {
+      clearClaudeDoneIdleTimer()
+    }
+  } else if (normalizedAgent === 'harness') {
+    if (normalizedState === 'done') {
+      clearAgentIdleToSleepTimer()
+      scheduleHarnessIdleAfterDone()
+    } else {
+      clearHarnessDoneIdleTimer()
+    }
+  }
+  if (normalizedState === 'idle') scheduleAgentIdleToSleep(normalizedAgent)
+  else if (normalizedState !== 'done') clearAgentIdleToSleepTimer()
+  return sendAgentState(normalizedAgent, normalizedState, {
+    ...options,
+    eventId: options.eventId || nextAgentEventId(options.source || 'agent'),
+  })
+}
+
+function resetManualAgentTest() {
+  if (!latestAgentEvent || latestAgentEvent.source !== 'manual') return
+  queueAgentEvent(latestAgentEvent.agent, 'idle', {
+    source: 'manual-reset',
+    event: 'settings-closed',
+    detail: 'idle',
+    force: true,
+  })
+}
+
+function parseAgentEventArgs(args) {
+  const list = Array.isArray(args) ? args : []
+  let agent = ''
+  let state = ''
+  for (let i = 0; i < list.length; i++) {
+    const arg = String(list[i] || '')
+    if (arg === '--agent-event') {
+      if (AGENT_IDS.includes(list[i + 1])) agent = list[i + 1]
+      if (AGENT_STATES.includes(list[i + 2])) state = list[i + 2]
+      i += 2
+      continue
+    }
+    if (arg === '--agent-agent') {
+      if (AGENT_IDS.includes(list[i + 1])) agent = list[i + 1]
+      i++
+      continue
+    }
+    if (arg === '--agent-state') {
+      if (AGENT_STATES.includes(list[i + 1])) state = list[i + 1]
+      i++
+      continue
+    }
+    const eventMatch = arg.match(/^--agent-event=([^:]+)[:,/](.+)$/)
+    if (eventMatch) {
+      if (AGENT_IDS.includes(eventMatch[1])) agent = eventMatch[1]
+      if (AGENT_STATES.includes(eventMatch[2])) state = eventMatch[2]
+    }
+  }
+  if (!agent || !state) return null
+  return { agent, state }
+}
+
+function newestChildDirectory(root, matcher) {
+  let entries
+  try {
+    entries = fs.readdirSync(root, { withFileTypes: true })
+  } catch {
+    return ''
+  }
+  const names = entries
+    .filter((entry) => entry.isDirectory() && (!matcher || matcher(entry.name)))
+    .map((entry) => entry.name)
+    .sort((a, b) => b.localeCompare(a, undefined, { numeric: true }))
+  return names.length ? path.join(root, names[0]) : ''
+}
+
+function findNewestCodexSessionFile() {
+  const root = path.join(os.homedir(), '.codex', 'sessions')
+  const yearDir = newestChildDirectory(root, (name) => /^\d{4}$/.test(name))
+  if (!yearDir) return ''
+  const monthDir = newestChildDirectory(yearDir, (name) => /^\d{2}$/.test(name))
+  if (!monthDir) return ''
+  const dayDir = newestChildDirectory(monthDir, (name) => /^\d{2}$/.test(name))
+  if (!dayDir) return ''
+
+  let entries
+  try {
+    entries = fs.readdirSync(dayDir, { withFileTypes: true })
+  } catch {
+    return ''
+  }
+  const candidates = []
+  for (const entry of entries) {
+    if (!entry.isFile() || !/\.jsonl$/i.test(entry.name)) continue
+    const filePath = path.join(dayDir, entry.name)
+    try {
+      const stat = fs.statSync(filePath)
+      candidates.push({ filePath, mtimeMs: stat.mtimeMs })
+    } catch {
+      // The session may be rotated while scanning.
+    }
+  }
+  candidates.sort((a, b) => b.mtimeMs - a.mtimeMs)
+  return candidates.length ? candidates[0].filePath : ''
+}
+
+function setAgentWatcherStatus(active, filePath) {
+  agentRuntimeStatus = {
+    ...agentRuntimeStatus,
+    watcherActive: !!active,
+    watcherPath: filePath || '',
+  }
+  broadcastAgentStatus()
+}
+
+function codexEventMapping(record) {
+  if (!record || typeof record !== 'object') return null
+  const payload = record.payload && typeof record.payload === 'object' ? record.payload : {}
+  const outerType = String(record.type || '')
+  const innerType = String(payload.type || '')
+  const eventType = innerType || outerType
+  const detail = payload.name || payload.tool_name || payload.message || payload.text || payload.call_id || ''
+
+  if (eventType === 'task_started') return { state: 'link', event: eventType, detail }
+  if (eventType === 'user_message') return { state: 'think', event: eventType, detail }
+  if (eventType === 'reasoning') return { state: 'think', event: eventType, detail }
+  if (eventType === 'function_call') return { state: 'tool', event: eventType, detail }
+  if (eventType === 'function_call_output') return { state: 'run', event: eventType, detail }
+  if (eventType === 'agent_message' || eventType === 'message') {
+    if (eventType === 'message' && payload.role && payload.role !== 'assistant') return null
+    return { state: 'reply', event: eventType, detail }
+  }
+  if (eventType === 'task_complete') return { state: 'done', event: eventType, detail }
+  if (eventType === 'turn_aborted' || eventType === 'interrupted') {
+    return { state: 'interrupted', event: eventType, detail }
+  }
+  if (eventType === 'error' || outerType === 'error') return { state: 'error', event: eventType, detail }
+  return null
+}
+
+function handleCodexLogLine(line) {
+  const text = line.toString('utf8').replace(/\r$/, '').trim()
+  if (!text) return
+  let record
+  try {
+    record = JSON.parse(text)
+  } catch {
+    return
+  }
+  const mapped = codexEventMapping(record)
+  if (!mapped) return
+  if (cfg.codexHookEnabled && Date.now() - lastCodexHookEventAt < 2500) return
+  queueAgentEvent('codex', mapped.state, {
+    source: 'codex-session',
+    event: mapped.event,
+    detail: mapped.detail,
+    force: mapped.state === 'done',
+  })
+}
+
+function codexHookEventMapping(payload) {
+  if (!payload || typeof payload !== 'object') return null
+  const event = String(payload.hook_event_name || '')
+  const detail = payload.tool_name || payload.prompt || payload.last_assistant_message || payload.reason || payload.source || ''
+  if (event === 'SessionStart') return { state: 'link', event, detail }
+  if (event === 'UserPromptSubmit') return { state: 'think', event, detail }
+  if (event === 'PreToolUse') return { state: 'tool', event, detail }
+  if (event === 'PostToolUse') return { state: 'run', event, detail }
+  if (event === 'PermissionRequest') return { state: 'approval', event, detail }
+  if (event === 'Stop') return { state: 'done', event, detail }
+  if (event === 'Interrupt') return { state: 'interrupted', event, detail }
+  if (event === 'SessionEnd') return { state: 'idle', event, detail }
+  return null
+}
+
+function handleCodexHookLine(line) {
+  const text = line.toString('utf8').replace(/^\uFEFF/, '').replace(/\r$/, '').trim()
+  if (!text) return
+  let record
+  try {
+    record = JSON.parse(text)
+  } catch {
+    return
+  }
+  let payload = null
+  if (record && typeof record.payloadBase64 === 'string') {
+    try {
+      payload = JSON.parse(Buffer.from(record.payloadBase64, 'base64').toString('utf8'))
+    } catch {
+      return
+    }
+  } else if (record && typeof record.payload === 'string') {
+    try {
+      payload = JSON.parse(record.payload)
+    } catch {
+      return
+    }
+  } else {
+    payload = record && record.payload
+  }
+  const mapped = codexHookEventMapping(payload)
+  if (!mapped) return
+  lastCodexHookEventAt = Date.now()
+  const sessionId = String(payload.session_id || '')
+  const turnId = String(payload.turn_id || '')
+  queueAgentEvent('codex', mapped.state, {
+    source: 'codex-hook',
+    event: mapped.event,
+    detail: mapped.detail,
+    eventId: 'codex-hook-' + sessionId + '-' + turnId + '-' + mapped.event + '-' + String(record.recordedAt || ''),
+    force: mapped.state === 'done',
+  })
+}
+
+function claudeHookEventMapping(payload) {
+  if (!payload || typeof payload !== 'object') return null
+  const event = String(payload.hook_event_name || '')
+  const detail = payload.tool_name || payload.prompt || payload.message ||
+    payload.reason || payload.agent_type || payload.trigger || payload.source || ''
+  if (event === 'SessionStart') return { state: 'link', event, detail }
+  if (event === 'UserPromptSubmit') return { state: 'think', event, detail }
+  if (event === 'PreToolUse') return { state: 'tool', event, detail }
+  if (event === 'PostToolUse') return { state: 'run', event, detail }
+  if (event === 'PostToolUseFailure') return { state: 'error', event, detail }
+  if (event === 'PermissionRequest') return { state: 'approval', event, detail }
+  if (event === 'Notification') {
+    const notification = [payload.notification_type, payload.title, payload.message]
+      .filter(Boolean)
+      .join(' ')
+    const needsApproval = /permission|approv|allow|授权|批准|允许/i.test(notification)
+    return { state: needsApproval ? 'approval' : 'wait', event, detail }
+  }
+  if (event === 'PreCompact') return { state: 'wait', event, detail }
+  if (event === 'SubagentStart') return { state: 'tool', event, detail }
+  if (event === 'SubagentStop') return { state: 'run', event, detail }
+  if (event === 'Stop') return { state: 'done', event, detail }
+  if (event === 'SessionEnd') return { state: 'idle', event, detail }
+  return null
+}
+
+function handleClaudeHookLine(line) {
+  const text = line.toString('utf8').replace(/^\uFEFF/, '').replace(/\r$/, '').trim()
+  if (!text) return
+  let record
+  try {
+    record = JSON.parse(text)
+  } catch {
+    return
+  }
+  let payload = null
+  if (record && typeof record.payloadBase64 === 'string') {
+    try {
+      payload = JSON.parse(Buffer.from(record.payloadBase64, 'base64').toString('utf8'))
+    } catch {
+      return
+    }
+  } else if (record && typeof record.payload === 'string') {
+    try {
+      payload = JSON.parse(record.payload)
+    } catch {
+      return
+    }
+  } else {
+    payload = record && record.payload
+  }
+  const mapped = claudeHookEventMapping(payload)
+  if (!mapped) return
+  const sessionId = String(payload.session_id || '')
+  const detailId = String(payload.tool_use_id || payload.agent_id || payload.trigger || '')
+  queueAgentEvent('claudecode', mapped.state, {
+    source: 'claude-hook',
+    event: mapped.event,
+    detail: mapped.detail,
+    eventId: 'claude-hook-' + sessionId + '-' + detailId + '-' + mapped.event + '-' + String(record.recordedAt || ''),
+    force: mapped.state === 'done',
+  })
+}
+
+function consumeCodexHookBytes(watcher, chunk) {
+  if (!chunk || chunk.length === 0) return
+  const data = watcher.partial.length ? Buffer.concat([watcher.partial, chunk]) : chunk
+  let start = 0
+  let newline = data.indexOf(0x0a, start)
+  while (newline >= 0) {
+    if (newline > start) handleCodexHookLine(data.subarray(start, newline))
+    start = newline + 1
+    newline = data.indexOf(0x0a, start)
+  }
+  watcher.partial = start < data.length ? data.subarray(start) : Buffer.alloc(0)
+  if (watcher.partial.length > CODEX_MAX_PENDING_BYTES) watcher.partial = Buffer.alloc(0)
+}
+
+function consumeClaudeHookBytes(watcher, chunk) {
+  if (!chunk || chunk.length === 0) return
+  const data = watcher.partial.length ? Buffer.concat([watcher.partial, chunk]) : chunk
+  let start = 0
+  let newline = data.indexOf(0x0a, start)
+  while (newline >= 0) {
+    if (newline > start) handleClaudeHookLine(data.subarray(start, newline))
+    start = newline + 1
+    newline = data.indexOf(0x0a, start)
+  }
+  watcher.partial = start < data.length ? data.subarray(start) : Buffer.alloc(0)
+  if (watcher.partial.length > CLAUDE_MAX_PENDING_BYTES) watcher.partial = Buffer.alloc(0)
+}
+
+function pollClaudeHookEvents() {
+  const watcher = claudeHookWatcher
+  if (!watcher || !watcher.active) return
+  let stat
+  try {
+    stat = fs.statSync(watcher.filePath)
+  } catch {
+    return
+  }
+  if (stat.size < watcher.offset) {
+    watcher.offset = 0
+    watcher.partial = Buffer.alloc(0)
+  }
+  if (stat.size <= watcher.offset) return
+
+  const buffer = Buffer.allocUnsafe(Math.min(CLAUDE_TAIL_CHUNK_BYTES, stat.size - watcher.offset))
+  let fd = null
+  try {
+    fd = fs.openSync(watcher.filePath, 'r')
+    let position = watcher.offset
+    while (position < stat.size) {
+      const length = Math.min(buffer.length, stat.size - position)
+      const bytesRead = fs.readSync(fd, buffer, 0, length, position)
+      if (bytesRead <= 0) break
+      consumeClaudeHookBytes(watcher, buffer.subarray(0, bytesRead))
+      position += bytesRead
+    }
+    watcher.offset = position
+  } catch {
+    // Hook events are best effort; the next poll will retry.
+  } finally {
+    if (fd !== null) {
+      try { fs.closeSync(fd) } catch {}
+    }
+  }
+}
+
+function pollCodexHookEvents() {
+  const watcher = codexHookWatcher
+  if (!watcher || !watcher.active) return
+  let stat
+  try {
+    stat = fs.statSync(watcher.filePath)
+  } catch {
+    return
+  }
+  if (stat.size < watcher.offset) {
+    watcher.offset = 0
+    watcher.partial = Buffer.alloc(0)
+  }
+  if (stat.size <= watcher.offset) return
+
+  const buffer = Buffer.allocUnsafe(Math.min(CODEX_TAIL_CHUNK_BYTES, stat.size - watcher.offset))
+  let fd = null
+  try {
+    fd = fs.openSync(watcher.filePath, 'r')
+    let position = watcher.offset
+    while (position < stat.size) {
+      const length = Math.min(buffer.length, stat.size - position)
+      const bytesRead = fs.readSync(fd, buffer, 0, length, position)
+      if (bytesRead <= 0) break
+      consumeCodexHookBytes(watcher, buffer.subarray(0, bytesRead))
+      position += bytesRead
+    }
+    watcher.offset = position
+  } catch {
+    // Hook events are best effort; the next poll will retry.
+  } finally {
+    if (fd !== null) {
+      try { fs.closeSync(fd) } catch {}
+    }
+  }
+}
+
+function setCodexHookWatcherStatus(active, filePath) {
+  agentRuntimeStatus = {
+    ...agentRuntimeStatus,
+    hookWatcherActive: !!active,
+    hookPath: filePath || '',
+  }
+  broadcastAgentStatus()
+}
+
+function stopCodexHookWatcher() {
+  if (!codexHookWatcher) return
+  if (codexHookWatcher.timer) clearInterval(codexHookWatcher.timer)
+  codexHookWatcher = null
+  setCodexHookWatcherStatus(false, '')
+}
+
+function startCodexHookWatcher() {
+  if (codexHookWatcher && codexHookWatcher.active) return
+  const filePath = codexHookEventPath()
+  let offset = 0
+  try {
+    const stat = fs.statSync(filePath)
+    if (stat.size > CODEX_MAX_PENDING_BYTES) {
+      fs.truncateSync(filePath, 0)
+      offset = 0
+    } else {
+      offset = stat.size
+    }
+  } catch {
+    offset = 0
+  }
+  codexHookWatcher = {
+    active: true,
+    timer: null,
+    filePath,
+    offset,
+    partial: Buffer.alloc(0),
+  }
+  codexHookWatcher.timer = setInterval(pollCodexHookEvents, CODEX_HOOK_WATCH_INTERVAL_MS)
+  setCodexHookWatcherStatus(true, filePath)
+}
+
+function setClaudeHookWatcherStatus(active, filePath) {
+  agentRuntimeStatus = {
+    ...agentRuntimeStatus,
+    claudeHookWatcherActive: !!active,
+    claudeHookPath: filePath || '',
+  }
+  broadcastAgentStatus()
+}
+
+function stopClaudeHookWatcher() {
+  if (!claudeHookWatcher) return
+  if (claudeHookWatcher.timer) clearInterval(claudeHookWatcher.timer)
+  claudeHookWatcher = null
+  setClaudeHookWatcherStatus(false, '')
+}
+
+function startClaudeHookWatcher() {
+  if (claudeHookWatcher && claudeHookWatcher.active) return
+  const filePath = claudeHookEventPath()
+  let offset = 0
+  try {
+    const stat = fs.statSync(filePath)
+    if (stat.size > CLAUDE_MAX_PENDING_BYTES) {
+      fs.truncateSync(filePath, 0)
+      offset = 0
+    } else {
+      offset = stat.size
+    }
+  } catch {
+    offset = 0
+  }
+  claudeHookWatcher = {
+    active: true,
+    timer: null,
+    filePath,
+    offset,
+    partial: Buffer.alloc(0),
+  }
+  claudeHookWatcher.timer = setInterval(pollClaudeHookEvents, CLAUDE_HOOK_WATCH_INTERVAL_MS)
+  setClaudeHookWatcherStatus(true, filePath)
+}
+
+function consumeCodexBytes(watcher, chunk) {
+  if (!chunk || chunk.length === 0) return
+  const data = watcher.partial.length ? Buffer.concat([watcher.partial, chunk]) : chunk
+  let start = 0
+  let newline = data.indexOf(0x0a, start)
+  while (newline >= 0) {
+    if (newline > start) handleCodexLogLine(data.subarray(start, newline))
+    start = newline + 1
+    newline = data.indexOf(0x0a, start)
+  }
+  watcher.partial = start < data.length ? data.subarray(start) : Buffer.alloc(0)
+  if (watcher.partial.length > CODEX_MAX_PENDING_BYTES) watcher.partial = Buffer.alloc(0)
+}
+
+function pollCodexSession() {
+  const watcher = codexWatcher
+  if (!watcher || !watcher.active) return
+  const newest = findNewestCodexSessionFile()
+  if (!newest) return
+
+  if (watcher.filePath !== newest) {
+    watcher.filePath = newest
+    watcher.partial = Buffer.alloc(0)
+    let startAt = 0
+    try {
+      startAt = fs.statSync(newest).size
+    } catch {
+      startAt = 0
+    }
+    watcher.offset = startAt
+    setAgentWatcherStatus(true, newest)
+  }
+
+  let stat
+  try {
+    stat = fs.statSync(watcher.filePath)
+  } catch {
+    return
+  }
+  const start = stat.size < watcher.offset ? 0 : watcher.offset
+  if (start === 0 && stat.size < watcher.offset) {
+    watcher.partial = Buffer.alloc(0)
+  }
+  if (stat.size <= start) {
+    watcher.offset = start
+    return
+  }
+
+  const buffer = Buffer.allocUnsafe(Math.min(CODEX_TAIL_CHUNK_BYTES, stat.size - start))
+  let fd = null
+  try {
+    fd = fs.openSync(watcher.filePath, 'r')
+    let position = start
+    while (position < stat.size) {
+      const length = Math.min(buffer.length, stat.size - position)
+      const bytesRead = fs.readSync(fd, buffer, 0, length, position)
+      if (bytesRead <= 0) break
+      consumeCodexBytes(watcher, buffer.subarray(0, bytesRead))
+      position += bytesRead
+    }
+    watcher.offset = position
+  } catch {
+    // Session files are best effort; a later poll will retry.
+  } finally {
+    if (fd !== null) {
+      try { fs.closeSync(fd) } catch {}
+    }
+  }
+}
+
+function stopCodexSessionWatcher() {
+  if (!codexWatcher) return
+  if (codexWatcher.timer) clearInterval(codexWatcher.timer)
+  codexWatcher = null
+  setAgentWatcherStatus(false, '')
+}
+
+function startCodexSessionWatcher() {
+  if (codexWatcher && codexWatcher.active) return
+  const filePath = findNewestCodexSessionFile()
+  codexWatcher = {
+    active: true,
+    timer: null,
+    filePath,
+    offset: 0,
+    partial: Buffer.alloc(0),
+  }
+  if (filePath) {
+    try {
+      codexWatcher.offset = fs.statSync(filePath).size
+    } catch {
+      codexWatcher.offset = 0
+    }
+  }
+  codexWatcher.timer = setInterval(pollCodexSession, CODEX_WATCH_INTERVAL_MS)
+  setAgentWatcherStatus(!!filePath, filePath)
+}
+
+function updateAgentWatcher() {
+  const selectedAgent = normalizeAgentId(cfg.agentType)
+  const animationEnabled = !!cfg.agentAnimationEnabled
+  const shouldWatchCodex = animationEnabled && selectedAgent === 'codex'
+  const shouldWatchClaude = animationEnabled && selectedAgent === 'claudecode'
+  const shouldWatchHarness = animationEnabled && selectedAgent === 'harness'
+
+  if (!animationEnabled) clearAgentIdleToSleepTimer()
+  if (!shouldWatchCodex) clearCodexDoneIdleTimer()
+  if (shouldWatchCodex) startCodexSessionWatcher()
+  else stopCodexSessionWatcher()
+  if (shouldWatchCodex && cfg.codexHookEnabled) startCodexHookWatcher()
+  else stopCodexHookWatcher()
+
+  if (!shouldWatchClaude) clearClaudeDoneIdleTimer()
+  if (shouldWatchClaude && cfg.claudeHookEnabled) startClaudeHookWatcher()
+  else stopClaudeHookWatcher()
+
+  if (!shouldWatchHarness) clearHarnessDoneIdleTimer()
+  if (shouldWatchHarness && cfg.harnessHookEnabled) startHarnessHookWatcher()
+  else stopHarnessHookWatcher()
+
+  if (!animationEnabled || agentIdleToSleepAgent && agentIdleToSleepAgent !== selectedAgent) {
+    clearAgentIdleToSleepTimer()
+  }
+}
+
+// ---------------------------------------------------------------------------
 // IPC
 // ---------------------------------------------------------------------------
+let pendingFastPetPosition = null
+let fastPetPositionScheduled = false
+
+function applyPetPosition(x, y, options = {}) {
+  if (!petWin || petWin.isDestroyed()) return { x: 0, y: 0 }
+  const nx = Math.round(Number(x))
+  const ny = Math.round(Number(y))
+  if (!isFinite(nx) || !isFinite(ny)) {
+    const [px, py] = petWin.getPosition()
+    return { x: px, y: py }
+  }
+  // 用 setBounds 显式固定宽高再移动：Windows 显示缩放非 100% 时，setPosition 拖动无边框
+  // 窗口会按移动方向被拉伸放大；这里锁定为正方形，避免拖动时变形（修复「拖动放大」）
+  const size = petSize(cfg.scale)
+  petWin.setBounds({ x: nx, y: ny, width: size, height: size })
+  syncBarBounds()
+  if (options.persist) schedulePosSave()
+  return { x: nx, y: ny }
+}
+
+function flushFastPetPosition() {
+  fastPetPositionScheduled = false
+  const next = pendingFastPetPosition
+  pendingFastPetPosition = null
+  if (next) applyPetPosition(next.x, next.y)
+}
+
 ipcMain.handle('pet:get-balance', () => fetchBalance())
 ipcMain.handle('pet:get-screen', () => {
   const d = screen.getPrimaryDisplay()
@@ -586,20 +2676,15 @@ ipcMain.handle('pet:get-position', () => {
   const [x, y] = petWin.getPosition()
   return { x, y }
 })
-ipcMain.handle('pet:set-position', (_e, { x, y }) => {
-  if (!petWin || petWin.isDestroyed()) return { x: 0, y: 0 }
-  // 用 setBounds 显式固定宽高再移动：Windows 显示缩放非 100% 时，setPosition 拖动无边框
-  // 窗口会按移动方向被拉伸放大；这里锁定为正方形，避免拖动时变形（修复「拖动放大」）
-  const size = petSize(cfg.scale)
-  const nx = Math.round(x)
-  const ny = Math.round(y)
-  petWin.setBounds({ x: nx, y: ny, width: size, height: size })
-  syncBarWindow()
-  schedulePosSave()
-  return { x: nx, y: ny }
+ipcMain.handle('pet:set-position', (_e, { x, y } = {}) => applyPetPosition(x, y, { persist: true }))
+ipcMain.on('pet:set-position-fast', (_e, { x, y } = {}) => {
+  pendingFastPetPosition = { x, y }
+  if (fastPetPositionScheduled) return
+  fastPetPositionScheduled = true
+  setImmediate(flushFastPetPosition)
 })
 ipcMain.handle('pet:get-size', () => {
-  const scale = loadConfig().scale
+  const scale = cfg.scale
   return { size: petSize(scale), scale, minSize: MIN_SIZE, maxSize: MAX_SIZE }
 })
 ipcMain.handle('pet:set-scale', (_e, { scale }) => {
@@ -671,11 +2756,20 @@ ipcMain.handle('pet:save-settings', (_e, settings) => {
     displayMode: (s.displayMode === 'taskbar' || s.displayMode === 'tray' || s.displayMode === 'hidden') ? s.displayMode : 'all',
     alwaysOnTop: bool(s.alwaysOnTop, cur.alwaysOnTop !== false),
     showTime: bool(s.showTime, cur.showTime !== false),
+    agentAnimationEnabled: bool(s.agentAnimationEnabled, !!cur.agentAnimationEnabled),
+    agentType: oneOf(s.agentType, AGENT_IDS, normalizeAgentId(cur.agentType)),
+    agentClickAnimation: bool(s.agentClickAnimation, cur.agentClickAnimation !== false),
+    codexHookEnabled: bool(s.codexHookEnabled, !!cur.codexHookEnabled),
+    claudeHookEnabled: bool(s.claudeHookEnabled, !!cur.claudeHookEnabled),
+    harnessHookEnabled: bool(s.harnessHookEnabled, !!cur.harnessHookEnabled),
   }
   const oldMode = cur.displayMode || 'all'
   const oldSkip = (oldMode === 'tray' || oldMode === 'hidden')
   const newSkip = (patch.displayMode === 'tray' || patch.displayMode === 'hidden')
   cfg = saveConfig(patch)
+  syncCodexHookInstallation()
+  syncClaudeHookInstallation()
+  syncHarnessHookInstallation()
   // 缩放变化时同步窗口尺寸
   if (petWin && !petWin.isDestroyed()) {
     const b = petWin.getBounds()
@@ -691,6 +2785,7 @@ ipcMain.handle('pet:save-settings', (_e, settings) => {
   syncBarWindow()
   updateHotkey(cfg.hotkey)
   updateAutoStart(cfg.autoStart)
+  updateAgentWatcher()
   if (petWin && !petWin.isDestroyed()) {
     petWin.webContents.send('pet:refresh')
     petWin.webContents.send('pet:config-updated')
@@ -712,6 +2807,28 @@ ipcMain.handle('pet:get-memory', () => {
   const used = Math.max(0, total - free)
   const percent = total > 0 ? Math.round((used / total) * 1000) / 10 : 0
   return { total, free, used, percent }
+})
+ipcMain.handle('pet:get-agent-assets', (_e, { agent, state } = {}) => {
+  return resolveAgentGifAssets(agent, state)
+})
+ipcMain.handle('pet:get-agent-status', () => agentStatusSnapshot())
+ipcMain.handle('pet:get-codex-hook-status', () => codexHookStatusSnapshot())
+ipcMain.handle('pet:install-codex-hook', () => installCodexHook())
+ipcMain.handle('pet:uninstall-codex-hook', () => uninstallCodexHook())
+ipcMain.handle('pet:get-claude-hook-status', () => claudeHookStatusSnapshot())
+ipcMain.handle('pet:install-claude-hook', () => installClaudeHook())
+ipcMain.handle('pet:uninstall-claude-hook', () => uninstallClaudeHook())
+ipcMain.handle('pet:get-harness-hook-status', () => harnessHookStatusSnapshot())
+ipcMain.handle('pet:install-harness-hook', () => installHarnessHook())
+ipcMain.handle('pet:uninstall-harness-hook', () => uninstallHarnessHook())
+ipcMain.handle('pet:set-agent-state', (_e, { agent, state } = {}) => {
+  const payload = queueAgentEvent(agent, state, {
+    force: true,
+    source: 'manual',
+    event: 'manual',
+    detail: state,
+  })
+  return { ok: true, ...payload }
 })
 ipcMain.handle('pet:set-idle', (_e, { idle }) => {
   if (petWin && !petWin.isDestroyed()) {
@@ -760,12 +2877,31 @@ ipcMain.handle('pet:quit', () => {
 // ---------------------------------------------------------------------------
 const isSmokeTest = process.argv.includes('--smoke-test')
 const isCaptureDemo = process.argv.includes('--capture-demo')
+const startupAgentEvent = parseAgentEventArgs(process.argv)
 
 const gotLock = app.requestSingleInstanceLock()
 if (!gotLock) {
   app.quit()
 } else {
-  app.on('second-instance', () => {
+  if (startupAgentEvent) {
+    queueAgentEvent(startupAgentEvent.agent, startupAgentEvent.state, {
+      source: 'cli',
+      event: 'command-line',
+      force: true,
+      detail: '--agent-event',
+    })
+  }
+
+  app.on('second-instance', (_event, commandLine) => {
+    const event = parseAgentEventArgs(commandLine)
+    if (event) {
+      queueAgentEvent(event.agent, event.state, {
+        source: 'cli',
+        event: 'command-line',
+        force: true,
+        detail: '--agent-event',
+      })
+    }
     if (petWin && !petWin.isDestroyed()) {
       petWin.show()
       petWin.focus()
@@ -777,9 +2913,6 @@ if (!gotLock) {
     console.log('[boot] userData=' + app.getPath('userData'))
     loadStats()
     createPetWindow()
-    applyDisplayMode(cfg.displayMode)
-    syncBarWindow()
-    updateHotkey(cfg.hotkey)
 
     if (isSmokeTest) {
       await new Promise((r) => setTimeout(r, 3500))
@@ -846,6 +2979,33 @@ if (!gotLock) {
                 hasDisplayMode: !!document.querySelector('input[name=displayMode]'),
                 hasAlwaysTop: !!document.getElementById('alwaysTopInput'),
                 hasShowTime: !!document.getElementById('showTimeInput'),
+                hasAgentAnimation: !!document.getElementById('agentAnimationInput'),
+                hasAgentType: !!document.getElementById('agentTypeInput'),
+                hasAgentClick: !!document.getElementById('agentClickAnimationInput'),
+                hasAgentTest: !!document.getElementById('agentTestGrid'),
+                hasAgentSleepHint: document.body.innerText.includes('空闲 20 秒后自动进入睡眠'),
+                hasThreeAgentPanels: document.querySelectorAll('.agent-panel').length === 3,
+                hasCodexHookWrap: !!document.getElementById('codexHookWrap'),
+                hasCodexHook: !!document.getElementById('codexHookInput'),
+                hasCodexHookStatus: !!document.getElementById('codexHookStatusPanel'),
+                hasCodexDetected: !!document.getElementById('codexDetectedText'),
+                hasCodexHookInstall: !!document.getElementById('codexHookInstallBtn'),
+                hasCodexHookUninstall: !!document.getElementById('codexHookUninstallBtn'),
+                hasCodexTutorial: !!document.getElementById('codexTutorialPanel'),
+                hasClaudeHookWrap: !!document.getElementById('claudeHookWrap'),
+                hasClaudeHook: !!document.getElementById('claudeHookInput'),
+                hasClaudeHookStatus: !!document.getElementById('claudeHookStatusPanel'),
+                hasClaudeDetected: !!document.getElementById('claudeDetectedText'),
+                hasClaudeHookInstall: !!document.getElementById('claudeHookInstallBtn'),
+                hasClaudeHookUninstall: !!document.getElementById('claudeHookUninstallBtn'),
+                hasClaudeTutorial: !!document.getElementById('claudeTutorialPanel'),
+                hasHarnessHookWrap: !!document.getElementById('harnessHookWrap'),
+                hasHarnessHook: !!document.getElementById('harnessHookInput'),
+                hasHarnessHookStatus: !!document.getElementById('harnessHookStatusPanel'),
+                hasHarnessDetected: !!document.getElementById('harnessDetectedText'),
+                hasHarnessHookInstall: !!document.getElementById('harnessHookInstallBtn'),
+                hasHarnessHookUninstall: !!document.getElementById('harnessHookUninstallBtn'),
+                hasHarnessTutorial: !!document.getElementById('harnessTutorialPanel'),
               }))()`
             )
             console.log('[smoke] settings=' + JSON.stringify(sinfo))
@@ -925,6 +3085,74 @@ if (!gotLock) {
             const flags = await petWin.webContents.executeJavaScript(`window.__dshpFlags ? window.__dshpFlags() : null`)
             const cfgState = await petWin.webContents.executeJavaScript(`window.__dshpConfig ? window.__dshpConfig() : null`)
             console.log('[smoke] applied-flags=' + JSON.stringify(flags) + ' cfg=' + JSON.stringify(cfgState))
+          // Agent GIF 自检：解析循环时长、状态轮换、单击/连击边界
+          try {
+            const agentProbe = await petWin.webContents.executeJavaScript(`(async () => {
+              const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+              const assets = await window.pet.getAgentAssets('codex', 'click')
+              window.__dshpAgentAnimation.configure({ agentAnimationEnabled: true, agentType: 'codex', agentClickAnimation: true })
+              window.__dshpAgentAnimation.setState('think')
+              await wait(700)
+              const stateStatus = window.__dshpAgentAnimation.status()
+              const stateDurationMs = stateStatus.assetDurationMs || 3200
+              const rotateAfter = Math.max(10500, stateDurationMs * Math.ceil(10000 / stateDurationMs) + 800)
+              await wait(rotateAfter)
+              const rotatedStatus = window.__dshpAgentAnimation.status()
+
+              window.__dshpAgentAnimation.click()
+              let singleStarted = null
+              for (let i = 0; i < 30; i++) {
+                await wait(30)
+                const current = window.__dshpAgentAnimation.status()
+                if (current.clickActive) {
+                  singleStarted = current
+                  break
+                }
+              }
+              if (!singleStarted) throw new Error('click asset did not start')
+              const singleCycleOk = singleStarted.clickCycles === 1
+                && Math.abs((singleStarted.clickEndsAt - singleStarted.clickStartedAt) - singleStarted.clickDurationMs) < 5
+              await wait(Math.max(0, singleStarted.clickEndsAt - performance.now()) + 350)
+              const singleAfter = window.__dshpAgentAnimation.status()
+
+              const sessionsBeforeRapid = singleAfter.clickSessionCount
+              window.__dshpAgentAnimation.click()
+              let rapidStarted = null
+              for (let i = 0; i < 30; i++) {
+                await wait(25)
+                const current = window.__dshpAgentAnimation.status()
+                if (current.clickActive) {
+                  rapidStarted = current
+                  break
+                }
+              }
+              if (!rapidStarted) throw new Error('rapid click asset did not start')
+              window.__dshpAgentAnimation.click()
+              await wait(60)
+              window.__dshpAgentAnimation.click()
+              await wait(60)
+              const rapidDuring = window.__dshpAgentAnimation.status()
+              await wait(Math.max(0, rapidDuring.clickEndsAt - performance.now()) + 350)
+              const rapidAfter = window.__dshpAgentAnimation.status()
+              window.__dshpAgentAnimation.configure({ agentAnimationEnabled: false, agentType: 'codex', agentClickAnimation: true })
+              return {
+                clickAssets: assets ? assets.assets.length : 0,
+                firstDurationMs: assets && assets.assets[0] ? assets.assets[0].durationMs : 0,
+                firstFrames: assets && assets.assets[0] ? assets.assets[0].frameCount : 0,
+                stateStatus,
+                rotatedStatus,
+                rotationChanged: rotatedStatus.stateLoadCount > stateStatus.stateLoadCount,
+                singleStarted,
+                singleCycleOk,
+                singleEnded: !singleAfter.clickActive,
+                rapidDuring,
+                rapidExtended: rapidDuring.clickCycles >= 1 && rapidDuring.clickEndsAt > rapidDuring.clickStartedAt,
+                rapidSingleSession: rapidDuring.clickSessionCount === sessionsBeforeRapid + 1,
+                rapidEnded: !rapidAfter.clickActive
+              }
+            })()`)
+            console.log('[smoke] agent-gif=' + JSON.stringify(agentProbe))
+          } catch (err) { console.error('[smoke] agent-gif failed:', err) }
           // 显示模式自检：4 种模式下桌宠都应始终可见（模式只影响任务栏/托盘图标）
           // 注意：切换任务栏组会重建桌宠窗口，因此从稳定的设置窗口发 saveSettings
           try {

@@ -1,0 +1,9 @@
+{
+  "name": "dsh-whale-pet-harness-bridge",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Privacy-preserving DeepSeek Harness status bridge for DeepSeek Whale Pet.",
+  "main": "index.js",
+  "exports": "./index.js"
+}

@@ -57,6 +57,9 @@ var state = {
     memoryStyle: 'fill',      // fill | bubble 内存显示方式：图形填充 / 气泡显示
     displayStyle: 'bubble',   // bubble | bar 桌宠显示方式：气泡 / 横条
     customImage: false,
+    agentAnimationEnabled: false,
+    agentType: 'codex',
+    agentClickAnimation: true,
   },
   quotes: [],
   mem: null,
@@ -73,6 +76,7 @@ var idleTimer = null
 var lastActivity = Date.now()
 var idleOn = false
 var mouseThrough = false
+var whaleHovering = false
 var bubbleShown = false
 var bubbleHideTimer = null
 var peakShown = false
@@ -184,7 +188,11 @@ function applyFlags(c) {
   if (f.contentMode === 'memory') f.displayStyle = 'bubble'
   if (typeof c.lowThreshold === 'number') state.lowThreshold = c.lowThreshold
   if (typeof c.customImage === 'boolean') f.customImage = c.customImage
+  if (typeof c.agentAnimationEnabled === 'boolean') f.agentAnimationEnabled = c.agentAnimationEnabled
+  if (typeof c.agentType === 'string') f.agentType = c.agentType
+  if (typeof c.agentClickAnimation === 'boolean') f.agentClickAnimation = c.agentClickAnimation
   applyDisplayStyle()
+  if (window.__dshpAgentAnimation) window.__dshpAgentAnimation.configure(c)
 }
 
 var timeShown = ''
@@ -647,17 +655,32 @@ function setCursor(v) {
   document.body.style.cursor = v || ''
 }
 
+function setWhaleHover(active) {
+  active = !!active
+  if (whaleHovering === active) return
+  whaleHovering = active
+  if (window.__dshpAgentAnimation && window.__dshpAgentAnimation.setHover) {
+    window.__dshpAgentAnimation.setHover(active)
+  }
+}
+
 // 全局指针移动：决定鼠标穿透状态，并让气泡在悬停/离开时渐显渐隐。
 // 关键点：闲置时只有鲸鱼本体是“可交互”的，其余透明区域（含原气泡位置）一律交给鼠标穿透，
 // 这样点击桌宠周围不会再被窗口挡住。悬停鲸鱼时接管鼠标以便按住/点击/拖动。
 function onDocPointerMove(e) {
   markActivity()
-  // 拖拽中 / 右键菜单打开时，必须保持接收鼠标，避免拖动或点菜单被穿透打断
-  if ((drag && drag.active) || menu.classList.contains('dshp-open')) {
+  // 拖动时窗口位置由快速通道接管，跳过命中检测和气泡检测，避免每帧额外开销。
+  if (drag && drag.active) {
     setMouseThrough(false)
     return
   }
   var overWhale = isWhaleHit(e)
+  setWhaleHover(overWhale)
+  // 拖拽中 / 右键菜单打开时，必须保持接收鼠标，避免拖动或点菜单被穿透打断
+  if (menu.classList.contains('dshp-open')) {
+    setMouseThrough(false)
+    return
+  }
   var overBubble = bubbleShown && isOverBubble(e)
   var m = state.flags.bubbleMode
   if (overWhale || overBubble) {
@@ -677,6 +700,8 @@ function onDocPointerMove(e) {
   }
 }
 document.addEventListener('pointermove', onDocPointerMove, true)
+document.addEventListener('pointerleave', function () { setWhaleHover(false) }, true)
+window.addEventListener('blur', function () { setWhaleHover(false) })
 
 // 测试钩子：返回音频上下文状态（自检用）
 window.__dshpAudioTest = function () {
@@ -825,7 +850,10 @@ function buildOdometerDigit(target, start, animate) {
 }
 
 function clearAmountVisual() {
-  while (amountEl.firstChild && amountEl.firstChild !== decreaseEl) amountEl.removeChild(amountEl.firstChild)
+  var nodes = Array.prototype.slice.call(amountEl.childNodes)
+  for (var i = 0; i < nodes.length; i++) {
+    if (nodes[i] !== decreaseEl) amountEl.removeChild(nodes[i])
+  }
 }
 
 function renderAmount(value, currency, animate) {
@@ -902,6 +930,10 @@ function scheduleExpress() {
   if (dragFrameId) return
   dragFrameId = requestAnimationFrame(function () {
     dragFrameId = null
+    if (drag && drag.active && window.pet.setPositionFast) {
+      window.pet.setPositionFast(state.left, state.top)
+      return
+    }
     express()
   })
 }
@@ -964,7 +996,12 @@ function endDrag(e, clickAllowed) {
   try {
     if (root.hasPointerCapture && root.hasPointerCapture(e.pointerId)) root.releasePointerCapture(e.pointerId)
   } catch (err) {}
-  if (clickAllowed && !drag.moved) { refresh(true); showBubble(); return }
+  if (clickAllowed && !drag.moved) {
+    if (window.__dshpAgentAnimation) window.__dshpAgentAnimation.click()
+    refresh(true)
+    showBubble()
+    return
+  }
   if (dragFrameId) { cancelAnimationFrame(dragFrameId); dragFrameId = null }
   var wa = drag.vp
   var left = clamp(e.screenX - drag.grabX, wa.x, Math.max(wa.x, wa.x + wa.width - drag.w))

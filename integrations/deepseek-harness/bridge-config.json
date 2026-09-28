@@ -1,0 +1,6 @@
+{
+  "outputPath": "../../harness-agent-events.jsonl",
+  "flushIntervalMs": 80,
+  "heartbeatMs": 30000,
+  "maxFileBytes": 2097152
+}

@@ -105,6 +105,65 @@
     padding: 7px 12px; margin-bottom: 10px;
   }
   #imageBtn:hover, #audioBtn:hover { background: var(--teal-soft); border-color: #8dbab4; }
+  .agent-panel {
+    padding: 12px 0 8px;
+    border-top: 1px solid #e4ebea;
+  }
+  .agent-panel-head {
+    display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
+    margin-bottom: 8px;
+  }
+  .agent-panel-title { font-size: 13px; font-weight: 700; color: #284b47; }
+  .agent-panel-meta {
+    display: block; margin-top: 2px; font-size: 11px; color: var(--muted);
+    line-height: 1.45;
+  }
+  .agent-panel .check { margin: 0; flex: 0 0 auto; }
+  .agent-actions { display: flex; flex-wrap: wrap; gap: 7px; margin: 0 0 8px; }
+  .agent-action {
+    padding: 7px 11px; background: #fff; color: var(--teal-dark);
+    border: 1px solid #b9cfcb; margin: 0;
+  }
+  .agent-action:hover { background: var(--teal-soft); border-color: #8dbab4; }
+  .agent-action.primary { background: var(--teal-soft); border-color: #99c7c0; }
+  .agent-action.danger { color: #9f4137; border-color: #e2bbb5; }
+  .agent-action.danger:hover { background: #fff1ef; border-color: #d69c93; }
+  .agent-tutorial {
+    display: none; margin: 4px 0 10px; padding: 9px 11px;
+    border-left: 3px solid #8dbab4; background: #f6faf9;
+    color: #455b59; font-size: 11px; line-height: 1.65;
+  }
+  .agent-tutorial.open { display: block; }
+  .agent-tutorial strong { color: #284b47; }
+  .agent-tutorial p { margin: 5px 0; }
+  .agent-tutorial ol { margin: 6px 0 6px 18px; padding: 0; }
+  .agent-tutorial li { margin: 4px 0; }
+  .agent-tutorial code {
+    padding: 1px 4px; border-radius: 4px; background: #e8f0ee;
+    color: #28534e; font-family: Consolas, monospace;
+  }
+  .agent-test-grid {
+    display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 7px; margin: 2px 0 10px;
+  }
+  .agent-test-btn {
+    padding: 7px 6px; background: #f4f8f7; color: #35534f;
+    border: 1px solid #c8d8d5; font-size: 12px;
+  }
+  .agent-test-btn:hover { background: var(--teal-soft); border-color: #8dbab4; }
+  .agent-status {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 4px 12px;
+    margin: -2px 0 11px; padding: 8px 0 7px;
+    border-top: 1px solid #e4ebea; border-bottom: 1px solid #e4ebea;
+    font-size: 11px; color: var(--muted);
+  }
+  .agent-status-main { grid-column: 1 / -1; display: flex; align-items: center; gap: 7px; }
+  .agent-status-dot {
+    width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto;
+    background: #a8b4b2; box-shadow: 0 0 0 3px rgba(168,180,178,.15);
+  }
+  .agent-status-dot.on { background: #15966a; box-shadow: 0 0 0 3px rgba(21,150,106,.15); }
+  .agent-status-value { color: #3f5351; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #status { font-size: 12px; margin-top: 7px; min-height: 15px; line-height: 1.5; word-break: break-all; }
   .ok { color: #147b54; }
   .err { color: #b93f35; }
@@ -184,6 +243,172 @@
           <label class="radio"><input type="radio" name="displayStyle" value="bar" /><span>桌面横条</span></label>
         </div>
         <div class="tip">横条显示在鲸鱼左侧下方，不再展开气泡；系统内存模式只能使用鲸鱼气泡。</div>
+      </div>
+    </div>
+
+    <div class="group">
+      <h2>Agent 动画</h2>
+      <label class="check">
+        <input type="checkbox" id="agentAnimationInput" />
+        <span>启用 Agent 状态动画</span>
+        <span class="sub">用 GIF 显示 Agent 当前工作状态</span>
+      </label>
+      <div id="agentAnimationOptions">
+        <label class="field" for="agentTypeInput">当前显示的 Agent</label>
+        <select id="agentTypeInput">
+          <option value="codex">Codex</option>
+          <option value="claudecode">Claude Code</option>
+          <option value="harness">Harness</option>
+        </select>
+        <div class="tip">
+          三个 Agent 可以分别配置，也可以保持同时接入。这里只决定桌宠当前跟随哪一个；切换不会移除其它 Agent 的接入。
+          新用户建议先选一个正在使用的 Agent，打开它的“启用接入”，按教程完成后，再点击“检查并修复”。
+        </div>
+
+        <div class="agent-panel" id="codexHookWrap">
+          <div class="agent-panel-head">
+            <div>
+              <div class="agent-panel-title">Codex</div>
+              <span class="agent-panel-meta" id="codexDetectedText">正在检测本机 Codex 环境...</span>
+            </div>
+            <label class="check">
+              <input type="checkbox" id="codexHookInput" />
+              <span>启用接入</span>
+            </label>
+          </div>
+          <div class="agent-status" id="codexHookStatusPanel" aria-live="polite">
+            <div class="agent-status-main">
+              <span class="agent-status-dot" id="codexHookStatusDot"></span>
+              <span id="codexHookStatusText">尚未接入 Codex Hook</span>
+            </div>
+            <div>Hook 事件：<span class="agent-status-value" id="codexHookEventCount">--</span></div>
+            <div>运行状态：<span class="agent-status-value" id="codexHookRuntimeText">--</span></div>
+          </div>
+          <div class="agent-actions">
+            <button class="agent-action primary" id="codexHookInstallBtn" type="button">检查并修复</button>
+            <button class="agent-action danger" id="codexHookUninstallBtn" type="button">移除接入</button>
+            <button class="agent-action" id="codexTutorialBtn" type="button" aria-expanded="false">配置教程</button>
+          </div>
+          <div class="agent-tutorial" id="codexTutorialPanel">
+            <strong>Codex 首次配置</strong>
+            <p>适用于已经安装 Codex，并希望桌宠显示 Codex 正在思考、调用工具、等待批准或完成任务的状态。</p>
+            <ol>
+              <li>先正常启动一次 Codex，确认它能进入对话界面。配置目录通常是 <code>~/.codex</code>。</li>
+              <li>打开 Codex 区域的“启用接入”，点击“检查并修复”。桌宠会写入 Hook 配置并保留原文件备份。</li>
+              <li>完全关闭并重新打开正在使用的 Codex 会话。如果 Codex 询问是否信任 Hook，请选择允许。</li>
+              <li>向 Codex 发一条简单消息。鲸鱼应依次出现思考、工具或回复状态，完成后短时间显示完成。</li>
+            </ol>
+            <p><strong>看不到变化时：</strong>确认“当前显示的 Agent”选的是 Codex；确认 Codex 区域显示“已接入，正在接收”；再检查 Codex 是否已经重启。</p>
+          </div>
+        </div>
+
+        <div class="agent-panel" id="claudeHookWrap">
+          <div class="agent-panel-head">
+            <div>
+              <div class="agent-panel-title">Claude Code</div>
+              <span class="agent-panel-meta" id="claudeDetectedText">正在检测本机 Claude Code 环境...</span>
+            </div>
+            <label class="check">
+              <input type="checkbox" id="claudeHookInput" />
+              <span>启用接入</span>
+            </label>
+          </div>
+          <div class="agent-status" id="claudeHookStatusPanel" aria-live="polite">
+            <div class="agent-status-main">
+              <span class="agent-status-dot" id="claudeHookStatusDot"></span>
+              <span id="claudeHookStatusText">尚未接入 Claude Code Hook</span>
+            </div>
+            <div>Hook 事件：<span class="agent-status-value" id="claudeHookEventCount">--</span></div>
+            <div>运行状态：<span class="agent-status-value" id="claudeHookRuntimeText">--</span></div>
+          </div>
+          <div class="agent-actions">
+            <button class="agent-action primary" id="claudeHookInstallBtn" type="button">检查并修复</button>
+            <button class="agent-action danger" id="claudeHookUninstallBtn" type="button">移除接入</button>
+            <button class="agent-action" id="claudeTutorialBtn" type="button" aria-expanded="false">配置教程</button>
+          </div>
+          <div class="agent-tutorial" id="claudeTutorialPanel">
+            <strong>Claude Code 首次配置</strong>
+            <p>适用于已经安装 Claude Code，或者已经通过兼容服务完成 API 配置的用户。</p>
+            <ol>
+              <li>先正常启动一次 Claude Code，确认登录或接口配置可用。设置文件通常是 <code>~/.claude/settings.json</code>。</li>
+              <li>打开 Claude Code 区域的“启用接入”，点击“检查并修复”。原有的 Hook、环境变量和其它设置会保留。</li>
+              <li>完全关闭并重新打开 Claude Code 会话，让新的 Hook 配置被加载。</li>
+              <li>发送一条测试消息。鲸鱼应跟随思考、工具、批准和完成状态变化。</li>
+            </ol>
+            <p><strong>看不到变化时：</strong>确认“当前显示的 Agent”选的是 Claude Code；确认会话已经重启；如果使用第三方兼容接口，请先确认 Claude Code 本身能正常回复。</p>
+          </div>
+        </div>
+
+        <div class="agent-panel" id="harnessHookWrap">
+          <div class="agent-panel-head">
+            <div>
+              <div class="agent-panel-title">Harness</div>
+              <span class="agent-panel-meta" id="harnessDetectedText">正在检测本机 Harness 环境...</span>
+            </div>
+            <label class="check">
+              <input type="checkbox" id="harnessHookInput" />
+              <span>启用接入</span>
+            </label>
+          </div>
+          <div class="agent-status" id="harnessHookStatusPanel" aria-live="polite">
+            <div class="agent-status-main">
+              <span class="agent-status-dot" id="harnessHookStatusDot"></span>
+              <span id="harnessHookStatusText">尚未接入 Harness 插件</span>
+            </div>
+            <div>插件事件：<span class="agent-status-value" id="harnessHookEventCount">--</span></div>
+            <div>运行状态：<span class="agent-status-value" id="harnessHookRuntimeText">--</span></div>
+          </div>
+          <div class="agent-actions">
+            <button class="agent-action primary" id="harnessHookInstallBtn" type="button">安装或修复</button>
+            <button class="agent-action danger" id="harnessHookUninstallBtn" type="button">移除接入</button>
+            <button class="agent-action" id="harnessTutorialBtn" type="button" aria-expanded="false">配置教程</button>
+          </div>
+          <div class="agent-tutorial" id="harnessTutorialPanel">
+            <strong>Harness 首次配置</strong>
+            <p>适用于本机已经安装 DSH / Harness，并能启动它的 Web 配置界面的用户。</p>
+            <ol>
+              <li>先启动一次 DSH / Harness，确认 Web 配置能正常打开。相关目录通常是 <code>~/.dsh</code>。</li>
+              <li>打开 Harness 区域的“启用接入”，点击“安装或修复”。桌宠会安装本地 Cordis 插件并更新配置文件。</li>
+              <li>完全退出 DSH，再重新启动。只刷新网页不一定能让插件重新加载。</li>
+              <li>向 Agent 发一条消息，鲸鱼应显示连接、思考、工具和完成等状态。</li>
+            </ol>
+            <p><strong>看不到变化时：</strong>确认“当前显示的 Agent”选的是 Harness；确认 DSH 已完全重启；如果配置目录发生变化，可在教程中核对路径后重新检查修复。</p>
+          </div>
+        </div>
+
+        <div class="agent-status" id="agentStatusPanel" aria-live="polite">
+          <div class="agent-status-main">
+            <span class="agent-status-dot" id="agentStatusDot"></span>
+            <span id="agentStatusText">等待 Agent 事件</span>
+          </div>
+          <div>最近事件：<span class="agent-status-value" id="agentLastEvent">--</span></div>
+          <div>更新时间：<span class="agent-status-value" id="agentLastUpdate">--</span></div>
+        </div>
+        <label class="check">
+          <input type="checkbox" id="agentClickAnimationInput" checked />
+          <span>点击动画</span>
+          <span class="sub">点击鲸鱼时播放一次 click GIF</span>
+        </label>
+        <label class="field">状态测试</label>
+        <div class="agent-test-grid" id="agentTestGrid">
+          <button class="agent-test-btn" type="button" data-agent-state="idle">空闲</button>
+          <button class="agent-test-btn" type="button" data-agent-state="link">连接</button>
+          <button class="agent-test-btn" type="button" data-agent-state="wait">等待</button>
+          <button class="agent-test-btn" type="button" data-agent-state="think">思考</button>
+          <button class="agent-test-btn" type="button" data-agent-state="tool">工具</button>
+          <button class="agent-test-btn" type="button" data-agent-state="run">执行</button>
+          <button class="agent-test-btn" type="button" data-agent-state="reply">回复</button>
+          <button class="agent-test-btn" type="button" data-agent-state="approval">批准</button>
+          <button class="agent-test-btn" type="button" data-agent-state="error">错误</button>
+          <button class="agent-test-btn" type="button" data-agent-state="interrupted">中断</button>
+          <button class="agent-test-btn" type="button" data-agent-state="done">完成</button>
+          <button class="agent-test-btn" type="button" data-agent-state="hover">悬停</button>
+          <button class="agent-test-btn" type="button" data-agent-state="sleep">睡眠</button>
+          <button class="agent-test-btn" type="button" data-agent-state="click">点击</button>
+        </div>
+        <div class="tip" style="margin-top:0;">
+          同一状态每 10 秒随机切换，GIF 使用 250ms 渐隐渐显。点击一次播放一轮；连续点击会保持循环。空闲 20 秒后自动进入睡眠。
+        </div>
       </div>
     </div>
 
@@ -271,10 +496,10 @@
       <h2>外观定制</h2>
       <label class="field" for="scaleInput">鲸鱼大小</label>
       <div class="row2">
-        <input type="range" id="scaleInput" min="0.6" max="1.4" step="0.1" value="1" style="flex:1;" />
+        <input type="range" id="scaleInput" min="0.6" max="3" step="0.1" value="1" style="flex:1;" />
         <span class="sub" id="scaleValue" style="min-width:46px;text-align:right;">100%</span>
       </div>
-      <div class="tip" style="margin-top:2px;">拖动调整小鲸鱼的显示大小（60%–140%）。</div>
+      <div class="tip" style="margin-top:2px;">拖动调整小鲸鱼的显示大小（60%–300%）。</div>
       <label class="check">
         <input type="checkbox" id="customImageInput" />
         <span>使用自定义图片</span>

@@ -25,6 +25,48 @@ var quotesTextInput = $('quotesTextInput')
 var memoryStyleWrap = $('memoryStyleWrap')
 var displayStyleWrap = $('displayStyleWrap')
 var bubbleModeWrap = $('bubbleModeWrap')
+var agentAnimationInput = $('agentAnimationInput')
+var agentAnimationOptions = $('agentAnimationOptions')
+var agentTypeInput = $('agentTypeInput')
+var agentClickAnimationInput = $('agentClickAnimationInput')
+var codexHookWrap = $('codexHookWrap')
+var codexHookInput = $('codexHookInput')
+var codexHookStatusDot = $('codexHookStatusDot')
+var codexHookStatusText = $('codexHookStatusText')
+var codexHookEventCount = $('codexHookEventCount')
+var codexHookRuntimeText = $('codexHookRuntimeText')
+var codexHookInstallBtn = $('codexHookInstallBtn')
+var codexHookUninstallBtn = $('codexHookUninstallBtn')
+var codexDetectedText = $('codexDetectedText')
+var codexTutorialBtn = $('codexTutorialBtn')
+var codexTutorialPanel = $('codexTutorialPanel')
+var claudeHookWrap = $('claudeHookWrap')
+var claudeHookInput = $('claudeHookInput')
+var claudeHookStatusDot = $('claudeHookStatusDot')
+var claudeHookStatusText = $('claudeHookStatusText')
+var claudeHookEventCount = $('claudeHookEventCount')
+var claudeHookRuntimeText = $('claudeHookRuntimeText')
+var claudeHookInstallBtn = $('claudeHookInstallBtn')
+var claudeHookUninstallBtn = $('claudeHookUninstallBtn')
+var claudeDetectedText = $('claudeDetectedText')
+var claudeTutorialBtn = $('claudeTutorialBtn')
+var claudeTutorialPanel = $('claudeTutorialPanel')
+var harnessHookWrap = $('harnessHookWrap')
+var harnessHookInput = $('harnessHookInput')
+var harnessHookStatusDot = $('harnessHookStatusDot')
+var harnessHookStatusText = $('harnessHookStatusText')
+var harnessHookEventCount = $('harnessHookEventCount')
+var harnessHookRuntimeText = $('harnessHookRuntimeText')
+var harnessHookInstallBtn = $('harnessHookInstallBtn')
+var harnessHookUninstallBtn = $('harnessHookUninstallBtn')
+var harnessDetectedText = $('harnessDetectedText')
+var harnessTutorialBtn = $('harnessTutorialBtn')
+var harnessTutorialPanel = $('harnessTutorialPanel')
+var agentTestGrid = $('agentTestGrid')
+var agentStatusDot = $('agentStatusDot')
+var agentStatusText = $('agentStatusText')
+var agentLastEvent = $('agentLastEvent')
+var agentLastUpdate = $('agentLastUpdate')
 var preferredDisplayStyle = 'bubble'
 var scaleInput = $('scaleInput')
 var scaleValue = $('scaleValue')
@@ -92,6 +134,13 @@ window.pet.getFullConfig().then(function (c) {
   var dm = (c.displayMode === 'taskbar' || c.displayMode === 'tray' || c.displayMode === 'hidden') ? c.displayMode : 'all'
   var dmRadio = document.querySelector('input[name=displayMode][value="' + dm + '"]')
   if (dmRadio) dmRadio.checked = true
+  agentAnimationInput.checked = !!c.agentAnimationEnabled
+  agentTypeInput.value = (c.agentType === 'claudecode' || c.agentType === 'harness') ? c.agentType : 'codex'
+  agentClickAnimationInput.checked = c.agentClickAnimation !== false
+  codexHookInput.checked = !!c.codexHookEnabled
+  claudeHookInput.checked = !!c.claudeHookEnabled
+  harnessHookInput.checked = !!c.harnessHookEnabled
+  toggleAgentAnimationOptions()
 })
 
 function num(v, dft) {
@@ -133,6 +182,12 @@ function collect() {
     hotkey: hotkeyInput.checked,
     alwaysOnTop: alwaysTopInput.checked,
     displayMode: (document.querySelector('input[name=displayMode]:checked') || {}).value || 'all',
+    agentAnimationEnabled: agentAnimationInput.checked,
+    agentType: agentTypeInput.value,
+    agentClickAnimation: agentClickAnimationInput.checked,
+    codexHookEnabled: codexHookInput.checked,
+    claudeHookEnabled: claudeHookInput.checked,
+    harnessHookEnabled: harnessHookInput.checked,
   }
 }
 
@@ -176,6 +231,170 @@ function toggleMemoryStyle() {
   memoryStyleWrap.style.display = cm === 'memory' ? '' : 'none'
   toggleDisplayStyle()
 }
+
+function toggleAgentAnimationOptions() {
+  var enabled = agentAnimationInput.checked
+  agentAnimationOptions.style.opacity = enabled ? '1' : '.62'
+  agentTypeInput.disabled = !enabled
+  agentClickAnimationInput.disabled = !enabled
+  codexHookInstallBtn.disabled = !enabled || !codexHookInput.checked
+  claudeHookInstallBtn.disabled = !enabled || !claudeHookInput.checked
+  harnessHookInstallBtn.disabled = !enabled || !harnessHookInput.checked
+}
+
+function formatAgentStatusTime(timestamp) {
+  var value = Number(timestamp)
+  if (!isFinite(value) || value <= 0) return '--'
+  var d = new Date(value)
+  var p = function (n) { return String(n).padStart(2, '0') }
+  return p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds())
+}
+
+function renderAgentStatus(status) {
+  if (!status) return
+  var connected = !!status.connected
+  var watching = !!status.watcherActive
+  agentStatusDot.className = 'agent-status-dot' + (connected || watching ? ' on' : '')
+  if (!status.enabled) {
+    agentStatusText.textContent = '实验功能已关闭'
+  } else if (connected) {
+    agentStatusText.textContent = '已接收 Agent 事件 · ' + (status.agent || status.selectedAgent || '--')
+  } else if (watching) {
+    if (status.selectedAgent === 'claudecode') {
+      agentStatusText.textContent = '正在监听 Claude Code Hook 事件'
+    } else if (status.selectedAgent === 'harness') {
+      agentStatusText.textContent = '正在监听 Harness 插件事件'
+    } else {
+      agentStatusText.textContent = '正在监听 Codex 新会话事件'
+    }
+  } else {
+    agentStatusText.textContent = '等待 Agent 事件'
+  }
+
+  var eventParts = []
+  if (status.event) eventParts.push(status.event)
+  if (status.state) eventParts.push(status.state)
+  if (status.detail) eventParts.push(status.detail)
+  agentLastEvent.textContent = eventParts.length ? eventParts.join(' · ') : '--'
+  agentLastUpdate.textContent = formatAgentStatusTime(status.updatedAt)
+}
+
+function renderCodexHookStatus(status) {
+  if (!status) return
+  var installed = !!status.installed
+  var active = !!status.watcherActive
+  codexHookStatusDot.className = 'agent-status-dot' + (installed ? ' on' : '')
+  codexHookEventCount.textContent = String(status.installedEvents || 0) + ' / ' + String(status.totalEvents || 0)
+  codexHookRuntimeText.textContent = active ? '正在监听事件文件' : '尚未监听'
+  codexHookUninstallBtn.disabled = !installed && !Number(status.installedEvents)
+  codexDetectedText.textContent = status.detected
+    ? '已检测到本机 Codex 配置'
+    : '未检测到本机 Codex 配置，请先安装并运行一次 Codex'
+  codexDetectedText.title = status.detectedPath || ''
+
+  if (!status.enabled) {
+    codexHookStatusText.textContent = '未启用接入'
+  } else if (!status.desired) {
+    codexHookStatusText.textContent = '已启用配置；打开 Agent 动画后生效'
+  } else if (installed && active) {
+    codexHookStatusText.textContent = '已接入，正在接收 Codex 状态'
+  } else if (installed) {
+    codexHookStatusText.textContent = '已接入；切换到当前显示后开始接收'
+  } else if (status.error) {
+    codexHookStatusText.textContent = '接入失败：' + status.error
+  } else {
+    codexHookStatusText.textContent = '尚未完整接入，请检查并修复'
+  }
+}
+
+function refreshCodexHookStatus() {
+  return window.pet.getCodexHookStatus().then(renderCodexHookStatus)
+}
+
+function renderClaudeHookStatus(status) {
+  if (!status) return
+  var installed = !!status.installed
+  var active = !!status.watcherActive
+  claudeHookStatusDot.className = 'agent-status-dot' + (installed ? ' on' : '')
+  claudeHookEventCount.textContent = String(status.installedEvents || 0) + ' / ' + String(status.totalEvents || 0)
+  claudeHookRuntimeText.textContent = active ? '正在监听事件文件' : '尚未监听'
+  claudeHookUninstallBtn.disabled = !installed && !Number(status.installedEvents)
+  claudeDetectedText.textContent = status.detected
+    ? '已检测到本机 Claude Code 配置'
+    : '未检测到本机 Claude Code 配置，请先安装并运行一次 Claude Code'
+  claudeDetectedText.title = status.detectedPath || ''
+
+  if (!status.enabled) {
+    claudeHookStatusText.textContent = '未启用接入'
+  } else if (!status.desired) {
+    claudeHookStatusText.textContent = '已启用配置；打开 Agent 动画后生效'
+  } else if (installed && active) {
+    claudeHookStatusText.textContent = '已接入，正在接收 Claude Code 状态'
+  } else if (installed) {
+    claudeHookStatusText.textContent = '已接入；切换到当前显示后开始接收'
+  } else if (status.error) {
+    claudeHookStatusText.textContent = '接入失败：' + status.error
+  } else {
+    claudeHookStatusText.textContent = '尚未完整接入，请检查并修复'
+  }
+}
+
+function refreshClaudeHookStatus() {
+  return window.pet.getClaudeHookStatus().then(renderClaudeHookStatus)
+}
+
+function renderHarnessHookStatus(status) {
+  if (!status) return
+  var installed = !!status.installed
+  var active = !!status.watcherActive
+  harnessHookStatusDot.className = 'agent-status-dot' + (installed ? ' on' : '')
+  harnessHookEventCount.textContent = String(status.installedEvents || 0) + ' / ' + String(status.totalEvents || 0)
+  harnessHookRuntimeText.textContent = active ? '正在监听事件文件' : '尚未监听'
+  harnessHookUninstallBtn.disabled = !installed && !Number(status.installedEvents)
+  harnessDetectedText.textContent = status.detected
+    ? '已检测到本机 Harness 配置'
+    : '未检测到本机 Harness 配置，请先安装并启动一次 DSH'
+  harnessDetectedText.title = status.detectedPath || ''
+
+  if (!status.enabled) {
+    harnessHookStatusText.textContent = '未启用接入'
+  } else if (!status.desired) {
+    harnessHookStatusText.textContent = '已启用配置；打开 Agent 动画后生效'
+  } else if (installed && active) {
+    harnessHookStatusText.textContent = '已接入，正在接收 Harness 状态'
+  } else if (installed) {
+    harnessHookStatusText.textContent = '已接入；切换到当前显示并重启 DSH 后开始接收'
+  } else if (status.error) {
+    harnessHookStatusText.textContent = '接入失败：' + status.error
+  } else {
+    harnessHookStatusText.textContent = '尚未完整接入，请检查并修复'
+  }
+}
+
+function refreshHarnessHookStatus() {
+  return window.pet.getHarnessHookStatus().then(renderHarnessHookStatus)
+}
+
+window.pet.getAgentStatus().then(renderAgentStatus)
+if (window.pet.onAgentStatus) window.pet.onAgentStatus(renderAgentStatus)
+refreshCodexHookStatus()
+refreshClaudeHookStatus()
+refreshHarnessHookStatus()
+
+agentAnimationInput.addEventListener('change', toggleAgentAnimationOptions)
+agentTypeInput.addEventListener('change', toggleAgentAnimationOptions)
+codexHookInput.addEventListener('change', function () {
+  toggleAgentAnimationOptions()
+  setTimeout(refreshCodexHookStatus, 700)
+})
+claudeHookInput.addEventListener('change', function () {
+  toggleAgentAnimationOptions()
+  setTimeout(refreshClaudeHookStatus, 700)
+})
+harnessHookInput.addEventListener('change', function () {
+  toggleAgentAnimationOptions()
+  setTimeout(refreshHarnessHookStatus, 700)
+})
 Array.prototype.forEach.call(document.querySelectorAll('input[name=contentMode]'), function (r) {
   r.addEventListener('change', toggleMemoryStyle)
 })
@@ -194,6 +413,9 @@ function scheduleSave() {
     window.pet.saveSettings(collect()).then(function (r) {
       if (r && r.ok) statusEl.textContent = '已自动保存 ✓'
       statusEl.className = r && r.ok ? 'ok' : 'err'
+      refreshCodexHookStatus()
+      refreshClaudeHookStatus()
+      refreshHarnessHookStatus()
     })
   }, 500)
 }
@@ -205,6 +427,7 @@ Array.prototype.forEach.call(document.querySelectorAll('input, textarea, select'
 saveBtn.addEventListener('click', async function () {
   var r = await window.pet.saveSettings(collect())
   show(r && r.ok ? '已保存。桌宠已用新配置自动刷新。' : '保存失败', r && r.ok ? 'ok' : 'err')
+  refreshHarnessHookStatus()
 })
 
 testBtn.addEventListener('click', async function () {
@@ -239,4 +462,109 @@ audioBtn.addEventListener('click', async function () {
   } else {
     show('未选择或读取失败。', 'err')
   }
+})
+
+codexHookInstallBtn.addEventListener('click', async function () {
+  if (!agentAnimationInput.checked || !codexHookInput.checked) {
+    show('请先打开 Agent 动画和 Codex 的“启用接入”。', 'err')
+    return
+  }
+  if (saveTimer) { clearTimeout(saveTimer); saveTimer = null }
+  await window.pet.saveSettings(collect())
+  codexHookInstallBtn.disabled = true
+  var result = await window.pet.installCodexHook()
+  renderCodexHookStatus(result)
+  toggleAgentAnimationOptions()
+  show(result && result.ok ? 'Codex Hook 已检查并修复。' : ('接入失败：' + ((result && result.error) || '未知错误')), result && result.ok ? 'ok' : 'err')
+})
+
+claudeHookInstallBtn.addEventListener('click', async function () {
+  if (!agentAnimationInput.checked || !claudeHookInput.checked) {
+    show('请先打开 Agent 动画和 Claude Code 的“启用接入”。', 'err')
+    return
+  }
+  if (saveTimer) { clearTimeout(saveTimer); saveTimer = null }
+  await window.pet.saveSettings(collect())
+  claudeHookInstallBtn.disabled = true
+  var result = await window.pet.installClaudeHook()
+  renderClaudeHookStatus(result)
+  toggleAgentAnimationOptions()
+  show(result && result.ok ? 'Claude Code Hook 已检查并修复。' : ('接入失败：' + ((result && result.error) || '未知错误')), result && result.ok ? 'ok' : 'err')
+})
+
+harnessHookInstallBtn.addEventListener('click', async function () {
+  if (!agentAnimationInput.checked || !harnessHookInput.checked) {
+    show('请先打开 Agent 动画和 Harness 的“启用接入”。', 'err')
+    return
+  }
+  if (saveTimer) { clearTimeout(saveTimer); saveTimer = null }
+  await window.pet.saveSettings(collect())
+  harnessHookInstallBtn.disabled = true
+  var result = await window.pet.installHarnessHook()
+  renderHarnessHookStatus(result)
+  toggleAgentAnimationOptions()
+  show(result && result.ok ? 'Harness 插件已检查并修复，请重启 DSH 使配置生效。' : ('接入失败：' + ((result && result.error) || '未知错误')), result && result.ok ? 'ok' : 'err')
+})
+
+codexHookUninstallBtn.addEventListener('click', async function () {
+  codexHookInput.checked = false
+  if (saveTimer) { clearTimeout(saveTimer); saveTimer = null }
+  await window.pet.saveSettings(collect())
+  var result = await window.pet.uninstallCodexHook()
+  renderCodexHookStatus(result)
+  toggleAgentAnimationOptions()
+  show(result && result.ok ? 'Codex 接入已移除，原有配置备份仍然保留。' : ('移除失败：' + ((result && result.error) || '未知错误')), result && result.ok ? 'ok' : 'err')
+})
+
+claudeHookUninstallBtn.addEventListener('click', async function () {
+  claudeHookInput.checked = false
+  if (saveTimer) { clearTimeout(saveTimer); saveTimer = null }
+  await window.pet.saveSettings(collect())
+  var result = await window.pet.uninstallClaudeHook()
+  renderClaudeHookStatus(result)
+  toggleAgentAnimationOptions()
+  show(result && result.ok ? 'Claude Code 接入已移除，原有配置备份仍然保留。' : ('移除失败：' + ((result && result.error) || '未知错误')), result && result.ok ? 'ok' : 'err')
+})
+
+harnessHookUninstallBtn.addEventListener('click', async function () {
+  harnessHookInput.checked = false
+  if (saveTimer) { clearTimeout(saveTimer); saveTimer = null }
+  await window.pet.saveSettings(collect())
+  var result = await window.pet.uninstallHarnessHook()
+  renderHarnessHookStatus(result)
+  toggleAgentAnimationOptions()
+  show(result && result.ok ? 'Harness 接入已移除，原有配置备份仍然保留。' : ('移除失败：' + ((result && result.error) || '未知错误')), result && result.ok ? 'ok' : 'err')
+})
+
+function toggleTutorial(button, panel) {
+  var open = !panel.classList.contains('open')
+  panel.classList.toggle('open', open)
+  button.setAttribute('aria-expanded', open ? 'true' : 'false')
+  button.textContent = open ? '收起教程' : '配置教程'
+}
+
+codexTutorialBtn.addEventListener('click', function () {
+  toggleTutorial(codexTutorialBtn, codexTutorialPanel)
+})
+claudeTutorialBtn.addEventListener('click', function () {
+  toggleTutorial(claudeTutorialBtn, claudeTutorialPanel)
+})
+harnessTutorialBtn.addEventListener('click', function () {
+  toggleTutorial(harnessTutorialBtn, harnessTutorialPanel)
+})
+
+agentTestGrid.addEventListener('click', async function (e) {
+  var state = e.target && e.target.getAttribute && e.target.getAttribute('data-agent-state')
+  if (!state) return
+  if (!agentAnimationInput.checked) {
+    agentAnimationInput.checked = true
+    toggleAgentAnimationOptions()
+  }
+  var r = await window.pet.saveSettings(collect())
+  if (!r || !r.ok) {
+    show('实验功能设置保存失败。', 'err')
+    return
+  }
+  await window.pet.setAgentState(agentTypeInput.value, state)
+  show('已切换测试状态：' + state, 'ok')
 })

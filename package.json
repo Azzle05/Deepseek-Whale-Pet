@@ -1,10 +1,14 @@
 {
   "name": "deepseek-whale-pet",
-  "version": "1.4.0",
+  "version": "1.5.5",
   "description": "DeepSeek 余额小鲸鱼独立桌面桌宠",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
+    "test:hook": "node scripts/test-codex-hook.js",
+    "test:claude-hook": "node scripts/test-claude-hook.js",
+    "test:harness-hook": "node scripts/test-harness-hook.js",
+    "test:agent-runtime": "node scripts/test-agent-runtime.js",
     "smoke": "electron . --smoke-test",
     "dist": "electron-builder --win portable"
   },
@@ -25,11 +29,15 @@
       "preload.js",
       "renderer/**/*",
       "assets/**/*",
+      "integrations/**/*",
       "build/icon.ico",
       "package.json",
       "README.md",
       "LICENSE",
       "THIRD_PARTY_NOTICES.md"
+    ],
+    "asarUnpack": [
+      "integrations/**/*"
     ],
     "directories": {
       "output": "dist"

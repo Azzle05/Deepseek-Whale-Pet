@@ -9,6 +9,8 @@ contextBridge.exposeInMainWorld('pet', {
   getScreen: () => ipcRenderer.invoke('pet:get-screen'),
   getPosition: () => ipcRenderer.invoke('pet:get-position'),
   setPosition: (x, y) => ipcRenderer.invoke('pet:set-position', { x, y }),
+  // 拖动期间的无 Promise 快速通道；主进程会合并同一时刻的移动请求
+  setPositionFast: (x, y) => ipcRenderer.send('pet:set-position-fast', { x, y }),
   // 尺寸
   getSize: () => ipcRenderer.invoke('pet:get-size'),
   setScale: (scale) => ipcRenderer.invoke('pet:set-scale', { scale }),
@@ -33,6 +35,19 @@ contextBridge.exposeInMainWorld('pet', {
   // 自定义点击音效
   getAudioUrl: () => ipcRenderer.invoke('pet:get-audio-url'),
   chooseAudio: () => ipcRenderer.invoke('pet:choose-audio'),
+  // 实验性 Agent 状态动画
+  getAgentAssets: (agent, state) => ipcRenderer.invoke('pet:get-agent-assets', { agent, state }),
+  getAgentStatus: () => ipcRenderer.invoke('pet:get-agent-status'),
+  getCodexHookStatus: () => ipcRenderer.invoke('pet:get-codex-hook-status'),
+  installCodexHook: () => ipcRenderer.invoke('pet:install-codex-hook'),
+  uninstallCodexHook: () => ipcRenderer.invoke('pet:uninstall-codex-hook'),
+  getClaudeHookStatus: () => ipcRenderer.invoke('pet:get-claude-hook-status'),
+  installClaudeHook: () => ipcRenderer.invoke('pet:install-claude-hook'),
+  uninstallClaudeHook: () => ipcRenderer.invoke('pet:uninstall-claude-hook'),
+  getHarnessHookStatus: () => ipcRenderer.invoke('pet:get-harness-hook-status'),
+  installHarnessHook: () => ipcRenderer.invoke('pet:install-harness-hook'),
+  uninstallHarnessHook: () => ipcRenderer.invoke('pet:uninstall-harness-hook'),
+  setAgentState: (agent, state) => ipcRenderer.invoke('pet:set-agent-state', { agent, state }),
   // 事件
   onRefreshRequested: (cb) => {
     const listener = () => cb()
@@ -48,6 +63,16 @@ contextBridge.exposeInMainWorld('pet', {
     const listener = (_e, data) => cb(data)
     ipcRenderer.on('pet:bar-data', listener)
     return () => ipcRenderer.removeListener('pet:bar-data', listener)
+  },
+  onAgentState: (cb) => {
+    const listener = (_e, data) => cb(data)
+    ipcRenderer.on('pet:agent-state', listener)
+    return () => ipcRenderer.removeListener('pet:agent-state', listener)
+  },
+  onAgentStatus: (cb) => {
+    const listener = (_e, data) => cb(data)
+    ipcRenderer.on('pet:agent-status', listener)
+    return () => ipcRenderer.removeListener('pet:agent-status', listener)
   },
   // 其它
   openSettings: () => ipcRenderer.invoke('pet:open-settings'),
