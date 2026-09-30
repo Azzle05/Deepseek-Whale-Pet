@@ -14,7 +14,7 @@ function createTempRoot(name) {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'deepseek-whale-pet-' + name + '-'))
 }
 
-function loadMainForTest(userDataPath, claudeHomePath) {
+function loadMainForTest(userDataPath, claudeHomePath, codexHomePath, dshHomePath) {
   const source = fs.readFileSync(mainPath, 'utf8') + `
 module.exports.__claudeHookTest = {
   claudeHookEventMapping,
@@ -80,8 +80,14 @@ module.exports.__claudeHookTest = {
   }
 
   const originalLoad = Module._load
-  const originalClaudeHome = process.env.CLAUDE_CONFIG_DIR
+  const originalEnv = {
+    CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR,
+    CODEX_HOME: process.env.CODEX_HOME,
+    DSH_HOME: process.env.DSH_HOME,
+  }
   process.env.CLAUDE_CONFIG_DIR = claudeHomePath
+  process.env.CODEX_HOME = codexHomePath
+  process.env.DSH_HOME = dshHomePath
   Module._load = function load(request, parent, isMain) {
     if (request === 'electron') return electron
     return originalLoad.call(this, request, parent, isMain)
@@ -95,14 +101,18 @@ module.exports.__claudeHookTest = {
       api: testModule.exports.__claudeHookTest,
       handlers,
       restore() {
-        if (originalClaudeHome === undefined) delete process.env.CLAUDE_CONFIG_DIR
-        else process.env.CLAUDE_CONFIG_DIR = originalClaudeHome
+        for (const [key, value] of Object.entries(originalEnv)) {
+          if (value === undefined) delete process.env[key]
+          else process.env[key] = value
+        }
         Module._load = originalLoad
       },
     }
   } catch (err) {
-    if (originalClaudeHome === undefined) delete process.env.CLAUDE_CONFIG_DIR
-    else process.env.CLAUDE_CONFIG_DIR = originalClaudeHome
+    for (const [key, value] of Object.entries(originalEnv)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
     Module._load = originalLoad
     throw err
   }
@@ -126,8 +136,12 @@ function countWhaleGroups(root) {
 
 const root = createTempRoot('claude-hook')
 const claudeHome = path.join(root, 'claude-home')
+const codexHome = path.join(root, 'codex-home')
+const dshHome = path.join(root, 'dsh-home')
 const userData = path.join(root, 'user-data')
 fs.mkdirSync(claudeHome, { recursive: true })
+fs.mkdirSync(codexHome, { recursive: true })
+fs.mkdirSync(path.join(dshHome, 'profiles', 'web'), { recursive: true })
 fs.mkdirSync(userData, { recursive: true })
 
 const settingsPath = path.join(claudeHome, 'settings.json')
@@ -147,7 +161,7 @@ const initialSettings = {
 }
 fs.writeFileSync(settingsPath, JSON.stringify(initialSettings, null, 2) + '\n', 'utf8')
 
-const loaded = loadMainForTest(userData, claudeHome)
+const loaded = loadMainForTest(userData, claudeHome, codexHome, dshHome)
 try {
   const firstInstall = loaded.api.installClaudeHook()
   assert.equal(firstInstall.ok, true, 'install should succeed')
@@ -220,7 +234,7 @@ try {
   }
 
   loaded.api.enableClaudeHookForTest()
-  loaded.handlers.get('pet:save-settings')(null, { displayMode: 'all' })
+  loaded.handlers.get('pet:save-settings')(null, { displayMode: 'tray' })
   const savedConfig = loaded.handlers.get('pet:get-full-config')()
   assert.equal(savedConfig.agentType, 'claudecode', 'partial settings saves should preserve the selected agent')
 

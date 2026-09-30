@@ -9,12 +9,12 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Electron](https://img.shields.io/badge/Electron-43-47848F)](https://www.electronjs.org/)
 [![Platform: Windows](https://img.shields.io/badge/platform-Windows-0078D6)](#)
-[![GitHub release](https://img.shields.io/github/v/release/1527442452-cyber/Deepseek-Whale-Pet?display_name=tag&sort=semver)](https://github.com/1527442452-cyber/Deepseek-Whale-Pet/releases/latest)
+[![GitHub release](https://img.shields.io/github/v/release/Azzle05/Deepseek-Whale-Pet?display_name=tag&sort=semver)](https://github.com/Azzle05/Deepseek-Whale-Pet/releases/latest)
 
-[GitHub 仓库](https://github.com/1527442452-cyber/Deepseek-Whale-Pet) |
-[最新版本](https://github.com/1527442452-cyber/Deepseek-Whale-Pet/releases/latest)
+[GitHub 仓库](https://github.com/Azzle05/Deepseek-Whale-Pet) |
+[最新版本](https://github.com/Azzle05/Deepseek-Whale-Pet/releases/latest)
 
-**当前版本 / Current release:** v1.5.5
+**当前版本 / Current release:** v1.6.3
 
 **维护者 / Maintainer:** Azzle
 
@@ -31,17 +31,19 @@
 - **桌面交互**：拖拽、边缘吸附、左侧镜像、`60%-300%` 缩放、按压回弹和点击音效。
 - **气泡控制**：支持常显、悬停显示、点击显示三种模式。
 - **托盘运行**：运行时可隐藏任务栏入口，并通过托盘菜单操作。
+- **自动更新**：从 GitHub Releases 检查新版，下载便携版并校验 SHA256 后替换重启；校验失败时保留旧版本。
 - **Agent 状态动画（实验性）**：支持 Codex、Claude Code 和 Harness 状态驱动 GIF。
+- **扩展动画状态**：支持低余额、余额增长和拖动状态；睡眠时间可在设置中以 1–60 分钟调整。
 - **Codex 精准状态接入（实验性）**：可选启用本机 Codex Hook，低延迟显示思考、工具、回复等状态；默认关闭。
 - **Claude Code / Harness 精准状态接入（实验性）**：通过本机 Hook 或 Cordis 插件接收状态；默认关闭。
 - **本地配置**：API Key 和其他设置只保存在当前电脑，不会上传到项目仓库。
 
 ### 下载与运行
 
-从 [最新 Releases](https://github.com/1527442452-cyber/Deepseek-Whale-Pet/releases/latest)
-下载 `DeepSeek-Whale-Pet-1.5.5-portable.exe`，双击运行即可。
+从 [最新 Releases](https://github.com/Azzle05/Deepseek-Whale-Pet/releases/latest)
+下载 `DeepSeek-Whale-Pet-1.6.3-portable.exe`，双击运行即可。
 
-SHA256：`7B34B6D6AC39E3A0E570A40B893489E3042DBACB4605F9B0C97C646ED044CE74`
+SHA256 以对应 Release 页面公布的最终构建值为准。
 
 1. 右键小鲸鱼，选择 **设置**。
 2. 填入 DeepSeek API Key，可选择保存并测试连接。
@@ -53,6 +55,13 @@ API Key 可在 [DeepSeek 开放平台](https://platform.deepseek.com) 获取。
 > “未知发布者”。请只从本仓库的 Releases 页面下载，并核对 Release 中提供的
 > SHA256；不要运行来源不明的二次打包版本。
 
+### 自动更新
+
+设置页的“自动更新”区域可以检查 GitHub Releases 中的最新版本。自动下载仅接受
+固定的便携版文件名，并在安装前校验 Release 描述中公布的 SHA256。校验缺失或
+失败时不会覆盖当前程序，而是提示前往 Releases 手动下载。开发模式和自检模式
+不会执行更新安装。
+
 ### Agent 状态动画（实验性）
 
 在设置中开启 **Agent 状态动画** 并选择 Agent 后，桌宠会进入纯 GIF 模式，
@@ -63,7 +72,7 @@ API Key 可在 [DeepSeek 开放平台](https://platform.deepseek.com) 获取。
 - 鼠标悬停时切换到 `hover` GIF，移出后恢复之前的 Agent 状态。
 - 单击一次完整播放一轮 `click` GIF；连续点击会延长循环，停止点击后淡出。
 - `think` 状态会保留足够时间，避免被随后到达的工具调用事件瞬间覆盖。
-- 空闲状态连续 20 秒没有任何新事件时，会自动淡入 `sleep` GIF。
+- 空闲状态达到设置的睡眠时间后，会自动淡入 `sleep` GIF；点击桌宠可立即唤醒。
 - 设置页中的测试状态只用于预览；关闭设置窗口后会自动回到空闲状态。
 
 三个 Agent 的精准状态接入相互独立，可以同时启用。切换当前显示的 Agent
@@ -302,7 +311,7 @@ npm run smoke
    桌面化、余额查询、Hook/JSONL 接入和 Cordis 桥接等属于本项目结合实际需求
    的扩展实现。
 
-感谢以上项目、素材作者和技术资料的作者。当前 v1.5.5 的代码整理、
+感谢以上项目、素材作者和技术资料的作者。当前 v1.6.3 的代码整理、
 设置界面调整、功能定制、文档与新构建由 Azzle 维护。
 
 上述第三方 GIF、视频和技术包版权归各自原作者所有，本项目不会对其另行授予
@@ -329,18 +338,20 @@ npm run smoke
 - **Desktop interaction**: Dragging, edge snapping, horizontal mirroring, `60%-300%` scaling, bounce feedback, and click sounds.
 - **Bubble modes**: Keep the bubble visible, show it on hover, or show it after a click.
 - **Tray support**: Hide the taskbar entry while the app is running and use the tray menu instead.
+- **Automatic updates**: Check GitHub Releases, download the portable build, verify SHA256, then replace and restart. The current version is preserved if verification fails.
 - **Agent state animation (experimental)**: State-driven GIF animation for Codex, Claude Code, and Harness.
+- **Extended animation states**: Low balance, balance increase, and dragging states; the sleep delay is configurable from 1 to 60 minutes.
 - **Codex precise state bridge (experimental)**: Optional local Codex Hook for low-latency thinking, tool, completion, and idle states. Disabled by default.
 - **Claude Code / Harness precise state bridge (experimental)**: Optional local Hook or Cordis plugin integration for agent states. Disabled by default.
 - **Local configuration**: API keys and settings stay on the current computer and are not uploaded to the repository.
 
 ### Download and Run
 
-Download `DeepSeek-Whale-Pet-1.5.5-portable.exe` from the
-[latest Releases](https://github.com/1527442452-cyber/Deepseek-Whale-Pet/releases/latest)
+Download `DeepSeek-Whale-Pet-1.6.3-portable.exe` from the
+[latest Releases](https://github.com/Azzle05/Deepseek-Whale-Pet/releases/latest)
 and run it directly.
 
-SHA256: `7B34B6D6AC39E3A0E570A40B893489E3042DBACB4605F9B0C97C646ED044CE74`
+The SHA256 published on the matching Release page is authoritative.
 
 1. Right-click the whale and open **Settings**.
 2. Enter a DeepSeek API key. You can save it and test the connection.
@@ -353,6 +364,15 @@ An API key can be created on the [DeepSeek Platform](https://platform.deepseek.c
 > only from this repository's Releases page and verify the SHA256 published
 > with the release.
 
+### Automatic Updates
+
+The **Automatic Updates** section in Settings checks the latest GitHub Release.
+Automatic downloads accept only the expected portable executable name and verify
+the SHA256 published in the Release description before installation. If the hash
+is missing or does not match, the current executable is preserved and the app
+offers the Releases page for a manual download. Development and smoke-test runs
+never install updates.
+
 ### Agent State Animation (Experimental)
 
 Enable **Agent State Animation** in Settings and choose an agent. The pet then
@@ -364,7 +384,7 @@ multiple animations do not overlap.
 - Hovering switches to the `hover` GIF; leaving restores the previous agent state.
 - One click plays a complete `click` GIF loop. Repeated clicks extend the loop, then it fades out.
 - The `think` state remains visible long enough to avoid being replaced immediately by a following tool event.
-- After 20 seconds without a new event, the idle state fades into the `sleep` GIF.
+- After the configured sleep delay without a new event, the idle state fades into the `sleep` GIF. Clicking the pet wakes it immediately.
 - Test states in Settings are previews; closing the Settings window returns the pet to idle.
 
 The Codex, Claude Code, and Harness integrations are independent and can be enabled
@@ -627,7 +647,7 @@ references:
    extensions shaped around this application's requirements.
 
 Thanks to the authors of those projects, assets, and technical references.
-The v1.5.5 code cleanup, settings redesign, feature customization,
+The v1.6.3 code cleanup, settings redesign, feature customization,
 documentation, and builds are maintained by Azzle.
 
 Copyright in the third-party GIFs, videos, and technical package remains with

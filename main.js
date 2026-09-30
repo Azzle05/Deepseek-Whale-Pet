@@ -3,16 +3,22 @@
 // 功能：低余额提醒、开机自启、消耗统计、闲置半透明、托盘、全局热键、自定义图片等。
 'use strict'
 
-const { app, BrowserWindow, ipcMain, screen, nativeImage, Tray, Menu, Notification, dialog, globalShortcut } = require('electron')
+const { app, BrowserWindow, ipcMain, screen, nativeImage, Tray, Menu, Notification, dialog, globalShortcut, shell } = require('electron')
 
 // 允许 Web Audio 无需用户手势即可播放（余额刷新是后台动作）
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required')
 const path = require('node:path')
 const fs = require('node:fs')
 const os = require('node:os')
+const crypto = require('node:crypto')
+const { spawn } = require('node:child_process')
+const { Readable } = require('node:stream')
+const { pipeline } = require('node:stream/promises')
 const { pathToFileURL } = require('node:url')
 
 const BALANCE_URL = 'https://api.deepseek.com/user/balance'
+const UPDATE_REPO = 'Azzle05/Deepseek-Whale-Pet'
+const UPDATE_RELEASES_URL = 'https://github.com/' + UPDATE_REPO + '/releases/latest'
 const DEFAULT_SIZE = 196
 const MIN_SIZE = 96
 const MAX_SIZE = 588
@@ -23,6 +29,7 @@ const AGENT_IDS = ['codex', 'claudecode', 'harness']
 const AGENT_STATES = [
   'idle', 'link', 'wait', 'think', 'tool', 'run', 'reply',
   'approval', 'error', 'interrupted', 'done', 'hover', 'sleep', 'click',
+  'low_balance', 'balance_increase', 'dragging',
 ]
 const AGENT_STATE_FALLBACKS = {
   idle: ['sleep'],
@@ -39,12 +46,17 @@ const AGENT_STATE_FALLBACKS = {
   hover: ['idle'],
   sleep: ['idle'],
   click: [],
+  low_balance: ['idle'],
+  balance_increase: ['idle'],
+  dragging: ['idle'],
 }
 const AGENT_STATUS_FRESH_MS = 5 * 60 * 1000
 const CODEX_WATCH_INTERVAL_MS = 800
 const CODEX_HOOK_WATCH_INTERVAL_MS = 250
 const CODEX_DONE_HOLD_MS = 4000
-const AGENT_IDLE_TO_SLEEP_MS = 20000
+const DEFAULT_SLEEP_MINUTES = 10
+const MIN_SLEEP_MINUTES = 1
+const MAX_SLEEP_MINUTES = 60
 const CODEX_TAIL_CHUNK_BYTES = 512 * 1024
 const CODEX_MAX_PENDING_BYTES = 4 * 1024 * 1024
 const CODEX_DETAIL_LIMIT = 120
@@ -118,7 +130,8 @@ function defaultConfig() {
     sound: true,
     volume: 0.7,
     bounceStrength: 'normal',
-    bubbleMode: 'hover',      // always | hover | click 气泡显示模式
+    sleepMinutes: DEFAULT_SLEEP_MINUTES, // 1-60 分钟，空闲后进入睡眠
+    bubbleMode: 'click',      // always | hover | click 气泡显示模式
     clickSound: true,          // 点击气泡时的音效开关
     clickSoundSet: 'duck',     // duck | fx1 | custom 点击音效类型
     quotesEnabled: false,
@@ -129,7 +142,7 @@ function defaultConfig() {
     customImage: false,
     hotkey: true,
     showTime: true,
-    displayMode: 'all',   // all | taskbar | tray | hidden
+    displayMode: 'tray',   // all | taskbar | tray | hidden
     alwaysOnTop: true,      // 是否始终置顶
     agentAnimationEnabled: false, // 实验性：Agent 状态 GIF 动画
     agentType: 'codex',          // codex | claudecode | harness
@@ -184,14 +197,15 @@ function rendererConfig(c, includeSecrets) {
     memoryStyle: c.memoryStyle === 'bubble' ? 'bubble' : 'fill',
     displayStyle: contentMode === 'memory' || c.displayStyle !== 'bar' ? 'bubble' : 'bar',
     volume: c.volume,
-    bounceStrength: oneOf(c.bounceStrength, ['soft', 'normal', 'strong'], 'normal'),
-    bubbleMode: oneOf(c.bubbleMode, ['always', 'hover', 'click'], 'hover'),
+    bounceStrength: oneOf(c.bounceStrength, ['minimal', 'soft', 'normal', 'strong'], 'normal'),
+    sleepMinutes: clamp(Number(c.sleepMinutes) || DEFAULT_SLEEP_MINUTES, MIN_SLEEP_MINUTES, MAX_SLEEP_MINUTES),
+    bubbleMode: oneOf(c.bubbleMode, ['always', 'hover', 'click'], 'click'),
     clickSound: c.clickSound !== false,
     clickSoundSet: oneOf(c.clickSoundSet, ['duck', 'fx1', 'custom'], 'duck'),
     customImage: !!c.customImage,
     hotkey: c.hotkey !== false,
     autoStart: !!c.autoStart,
-    displayMode: oneOf(c.displayMode, ['all', 'taskbar', 'tray', 'hidden'], 'all'),
+    displayMode: oneOf(c.displayMode, ['all', 'taskbar', 'tray', 'hidden'], 'tray'),
     alwaysOnTop: c.alwaysOnTop !== false,
     showTime: c.showTime !== false,
     agentAnimationEnabled: !!c.agentAnimationEnabled,
@@ -229,6 +243,9 @@ let cfg = loadConfig()
 let petRendererReady = false
 let latestAgentEvent = null
 let agentEventSeq = 0
+let latestUpdateRelease = null
+let downloadedUpdatePath = ''
+let updateDownloadInFlight = null
 let agentRuntimeStatus = {
   source: '',
   agent: '',
@@ -595,6 +612,333 @@ function openSettings() {
     settingsWin = null
     resetManualAgentTest()
   })
+}
+
+// ---------------------------------------------------------------------------
+// 便携版自动更新
+// ---------------------------------------------------------------------------
+let updateState = {
+  phase: 'idle',
+  message: '尚未检查更新',
+  currentVersion: '',
+  latestVersion: '',
+  updateAvailable: false,
+  canDownload: false,
+  readyToInstall: false,
+  downloadable: false,
+  releasesUrl: UPDATE_RELEASES_URL,
+}
+
+function updatesDisabled() {
+  return !app.isPackaged || process.argv.includes('--smoke-test')
+}
+
+function parseVersion(value) {
+  const match = String(value || '').trim().match(/^v?(\d+)\.(\d+)\.(\d+)/i)
+  if (!match) return null
+  return [Number(match[1]), Number(match[2]), Number(match[3])]
+}
+
+function compareVersions(a, b) {
+  const av = parseVersion(a)
+  const bv = parseVersion(b)
+  if (!av || !bv) return 0
+  for (let i = 0; i < 3; i++) {
+    if (av[i] !== bv[i]) return av[i] > bv[i] ? 1 : -1
+  }
+  return 0
+}
+
+function extractAssetSha256(body, assetName) {
+  const text = String(body || '')
+  const lines = text.split(/\r?\n/)
+  for (let i = 0; i < lines.length; i++) {
+    if (!lines[i].includes(assetName)) continue
+    const nearby = lines.slice(i, i + 4).join(' ')
+    const match = nearby.match(/\b[a-f0-9]{64}\b/i)
+    if (match) return match[0].toLowerCase()
+  }
+  const allHashes = text.match(/\b[a-f0-9]{64}\b/gi) || []
+  return allHashes.length === 1 ? allHashes[0].toLowerCase() : ''
+}
+
+function updateStateSnapshot() {
+  return {
+    ...updateState,
+    currentVersion: app.getVersion(),
+  }
+}
+
+function setUpdateState(patch, broadcast = true) {
+  updateState = {
+    ...updateState,
+    ...patch,
+    currentVersion: app.getVersion(),
+    releasesUrl: UPDATE_RELEASES_URL,
+  }
+  if (broadcast && settingsWin && !settingsWin.isDestroyed()) {
+    settingsWin.webContents.send('pet:update-status', updateStateSnapshot())
+  }
+  return updateStateSnapshot()
+}
+
+async function checkForUpdates() {
+  if (updatesDisabled()) {
+    return setUpdateState({
+      phase: 'disabled',
+      message: '开发模式或自检模式下不检查更新，正式便携版可用。',
+      updateAvailable: false,
+      canDownload: false,
+      readyToInstall: false,
+    })
+  }
+
+  setUpdateState({
+    phase: 'checking',
+    message: '正在检查最新版本…',
+    updateAvailable: false,
+    canDownload: false,
+    readyToInstall: false,
+    downloadable: false,
+  })
+
+  try {
+    const response = await fetch('https://api.github.com/repos/' + UPDATE_REPO + '/releases/latest', {
+      headers: {
+        Accept: 'application/vnd.github+json',
+        'User-Agent': 'DeepSeek-Whale-Pet/' + app.getVersion(),
+      },
+      signal: AbortSignal.timeout(20000),
+    })
+    if (!response.ok) throw new Error('GitHub API HTTP ' + response.status)
+    const release = await response.json()
+    const latestVersion = String(release.tag_name || '').replace(/^v/i, '')
+    const updateAvailable = compareVersions(latestVersion, app.getVersion()) > 0
+    const asset = (Array.isArray(release.assets) ? release.assets : [])
+      .find((item) => /^DeepSeek-Whale-Pet-.*-portable\.exe$/i.test(String(item.name || '')))
+    const assetName = asset ? path.basename(String(asset.name)) : ''
+    const sha256 = asset ? extractAssetSha256(release.body, assetName) : ''
+    latestUpdateRelease = {
+      latestVersion,
+      asset: asset ? {
+        name: assetName,
+        url: String(asset.browser_download_url || ''),
+        size: Number(asset.size) || 0,
+      } : null,
+      sha256,
+      htmlUrl: String(release.html_url || UPDATE_RELEASES_URL),
+    }
+
+    if (!updateAvailable) {
+      return setUpdateState({
+        phase: 'current',
+        message: '当前已是最新版本 v' + app.getVersion() + '。',
+        latestVersion,
+        updateAvailable: false,
+        canDownload: false,
+        readyToInstall: false,
+        downloadable: false,
+      })
+    }
+    if (!asset || !assetName || !sha256) {
+      return setUpdateState({
+        phase: 'manual',
+        message: '发现新版本 v' + latestVersion + '，但缺少可校验的便携版文件或 SHA256。请前往 Releases 手动下载。',
+        latestVersion,
+        updateAvailable: true,
+        canDownload: false,
+        readyToInstall: false,
+        downloadable: false,
+      })
+    }
+    return setUpdateState({
+      phase: 'available',
+      message: '发现新版本 v' + latestVersion + '，可以下载更新。',
+      latestVersion,
+      updateAvailable: true,
+      canDownload: true,
+      readyToInstall: false,
+      downloadable: true,
+    })
+  } catch (err) {
+    return setUpdateState({
+      phase: 'error',
+      message: '检查更新失败：' + String((err && err.message) || err),
+      updateAvailable: false,
+      canDownload: false,
+      readyToInstall: false,
+      downloadable: false,
+    })
+  }
+}
+
+function sha256File(filePath) {
+  return new Promise((resolve, reject) => {
+    const hash = crypto.createHash('sha256')
+    const input = fs.createReadStream(filePath)
+    input.on('error', reject)
+    hash.on('error', reject)
+    hash.on('finish', () => resolve(hash.digest('hex').toLowerCase()))
+    input.pipe(hash)
+  })
+}
+
+async function downloadUpdate() {
+  if (updatesDisabled()) {
+    return setUpdateState({ phase: 'disabled', message: '开发模式或自检模式下不下载更新。' })
+  }
+  if (updateDownloadInFlight) return updateDownloadInFlight
+  const release = latestUpdateRelease
+  if (!release || !release.asset || !release.sha256) {
+    return setUpdateState({
+      phase: 'manual',
+      message: '没有可自动下载的更新，请先检查更新或前往 Releases 手动下载。',
+      canDownload: false,
+    })
+  }
+  if (downloadedUpdatePath && fs.existsSync(downloadedUpdatePath)) {
+    return setUpdateState({
+      phase: 'ready',
+      message: '更新包已下载并校验，可以安装并重启。',
+      updateAvailable: true,
+      canDownload: false,
+      readyToInstall: true,
+    })
+  }
+
+  updateDownloadInFlight = (async () => {
+    const tempDir = path.join(app.getPath('temp'), 'deepseek-whale-pet-update')
+    const destination = path.join(tempDir, release.asset.name)
+    try {
+      fs.mkdirSync(tempDir, { recursive: true })
+      setUpdateState({
+        phase: 'downloading',
+        message: '正在下载更新包…',
+        updateAvailable: true,
+        canDownload: false,
+        readyToInstall: false,
+      })
+      const response = await fetch(release.asset.url, {
+        headers: { 'User-Agent': 'DeepSeek-Whale-Pet/' + app.getVersion() },
+        signal: AbortSignal.timeout(300000),
+      })
+      if (!response.ok || !response.body) throw new Error('下载 HTTP ' + response.status)
+      await pipeline(Readable.fromWeb(response.body), fs.createWriteStream(destination))
+      const actualSha256 = await sha256File(destination)
+      if (actualSha256 !== release.sha256) {
+        try { fs.unlinkSync(destination) } catch { /* ignore */ }
+        throw new Error('SHA256 校验失败')
+      }
+      downloadedUpdatePath = destination
+      return setUpdateState({
+        phase: 'ready',
+        message: '更新包已下载并通过 SHA256 校验，可以安装并重启。',
+        updateAvailable: true,
+        canDownload: false,
+        readyToInstall: true,
+      })
+    } catch (err) {
+      downloadedUpdatePath = ''
+      return setUpdateState({
+        phase: 'error',
+        message: '下载更新失败：' + String((err && err.message) || err) + '。旧版本未改变。',
+        updateAvailable: true,
+        canDownload: true,
+        readyToInstall: false,
+      })
+    } finally {
+      updateDownloadInFlight = null
+    }
+  })()
+  return updateDownloadInFlight
+}
+
+function portableExecutablePath() {
+  const portableFile = String(process.env.PORTABLE_EXECUTABLE_FILE || '').trim()
+  if (portableFile && fs.existsSync(portableFile)) return portableFile
+
+  const portableDir = String(process.env.PORTABLE_EXECUTABLE_DIR || '').trim()
+  if (portableDir && fs.existsSync(portableDir)) {
+    try {
+      const candidates = fs.readdirSync(portableDir)
+        .filter((name) => /^DeepSeek-Whale-Pet-.*-portable\.exe$/i.test(name))
+        .map((name) => {
+          const fullPath = path.join(portableDir, name)
+          return { fullPath, mtimeMs: fs.statSync(fullPath).mtimeMs }
+        })
+        .sort((a, b) => b.mtimeMs - a.mtimeMs)
+      if (candidates[0]) return candidates[0].fullPath
+    } catch { /* fall through */ }
+  }
+  return process.execPath
+}
+
+async function installUpdate() {
+  if (updatesDisabled()) {
+    return setUpdateState({ phase: 'disabled', message: '开发模式或自检模式下不安装更新。' })
+  }
+  if (!downloadedUpdatePath || !fs.existsSync(downloadedUpdatePath)) {
+    return setUpdateState({
+      phase: 'error',
+      message: '没有可安装的更新包，请先下载。',
+      readyToInstall: false,
+    })
+  }
+
+  const targetFile = portableExecutablePath()
+  const helperDir = path.dirname(downloadedUpdatePath)
+  const helperPath = path.join(helperDir, 'apply-update.ps1')
+  const script = [
+    'param([int]$TargetProcessId, [string]$DownloadedFile, [string]$TargetFile)',
+    '$ErrorActionPreference = "Stop"',
+    '$deadline = (Get-Date).AddMinutes(2)',
+    'while (Get-Process -Id $TargetProcessId -ErrorAction SilentlyContinue) {',
+    '  if ((Get-Date) -gt $deadline) { exit 2 }',
+    '  Start-Sleep -Milliseconds 300',
+    '}',
+    'Copy-Item -LiteralPath $DownloadedFile -Destination $TargetFile -Force',
+    'Start-Process -FilePath $TargetFile',
+    'Start-Sleep -Milliseconds 500',
+    'Remove-Item -LiteralPath $DownloadedFile -Force -ErrorAction SilentlyContinue',
+    'Remove-Item -LiteralPath (Split-Path -Parent $MyInvocation.MyCommand.Path) -Recurse -Force -ErrorAction SilentlyContinue',
+  ].join('\r\n')
+
+  try {
+    fs.writeFileSync(helperPath, script, 'utf8')
+    const child = spawn('powershell.exe', [
+      '-NoProfile',
+      '-ExecutionPolicy', 'Bypass',
+      '-WindowStyle', 'Hidden',
+      '-File', helperPath,
+      String(process.pid),
+      downloadedUpdatePath,
+      targetFile,
+    ], {
+      detached: true,
+      windowsHide: true,
+      stdio: 'ignore',
+    })
+    child.unref()
+    setUpdateState({
+      phase: 'installing',
+      message: '正在退出旧版本并安装更新…',
+      readyToInstall: false,
+      canDownload: false,
+    })
+    setTimeout(() => app.quit(), 150)
+    return updateStateSnapshot()
+  } catch (err) {
+    return setUpdateState({
+      phase: 'error',
+      message: '启动更新安装器失败：' + String((err && err.message) || err),
+      readyToInstall: true,
+    })
+  }
+}
+
+async function openUpdateReleases() {
+  await shell.openExternal(UPDATE_RELEASES_URL)
+  return { ok: true }
 }
 
 // ---------------------------------------------------------------------------
@@ -1909,6 +2253,7 @@ function sendAgentState(rawAgent, rawState, options = {}) {
     timestamp,
     eventId: String(options.eventId || ''),
     force: !!options.force,
+    suppressClick: !!options.suppressClick,
     source: String(options.source || ''),
     event: String(options.event || ''),
     detail: compactAgentDetail(options.detail),
@@ -1966,6 +2311,14 @@ function clearAgentIdleToSleepTimer() {
   agentIdleToSleepAgent = ''
 }
 
+function agentIdleToSleepMs() {
+  return clamp(
+    Number(cfg.sleepMinutes) || DEFAULT_SLEEP_MINUTES,
+    MIN_SLEEP_MINUTES,
+    MAX_SLEEP_MINUTES,
+  ) * 60 * 1000
+}
+
 function scheduleAgentIdleToSleep(agent) {
   const normalizedAgent = normalizeAgentId(agent)
   if (!cfg.agentAnimationEnabled || normalizeAgentId(cfg.agentType) !== normalizedAgent) {
@@ -1976,6 +2329,7 @@ function scheduleAgentIdleToSleep(agent) {
 
   clearAgentIdleToSleepTimer()
   agentIdleToSleepAgent = normalizedAgent
+  const sleepMs = agentIdleToSleepMs()
   agentIdleToSleepTimer = setTimeout(() => {
     agentIdleToSleepTimer = null
     if (!cfg.agentAnimationEnabled || normalizeAgentId(cfg.agentType) !== normalizedAgent) {
@@ -1986,10 +2340,10 @@ function scheduleAgentIdleToSleep(agent) {
     queueAgentEvent(normalizedAgent, 'sleep', {
       source: normalizedAgent + '-idle-timeout',
       event: 'idle-to-sleep',
-      detail: 'sleep-after-' + Math.round(AGENT_IDLE_TO_SLEEP_MS / 1000) + 's-idle',
+      detail: 'sleep-after-' + Math.round(sleepMs / 60000) + 'm-idle',
       force: true,
     })
-  }, AGENT_IDLE_TO_SLEEP_MS)
+  }, sleepMs)
 }
 
 function scheduleCodexIdleAfterDone() {
@@ -2720,6 +3074,9 @@ ipcMain.handle('pet:save-settings', (_e, settings) => {
   scale = Math.round(clamp(scale, MIN_SCALE, MAX_SCALE) * 10) / 10
   // 缺失的字段保留当前已保存的值，避免部分保存把设置重置回默认
   const cur = loadConfig()
+  let sleepMinutes = Number(s.sleepMinutes)
+  if (!Number.isFinite(sleepMinutes)) sleepMinutes = cur.sleepMinutes
+  sleepMinutes = Math.round(clamp(sleepMinutes, MIN_SLEEP_MINUTES, MAX_SLEEP_MINUTES))
   let volume = Number(s.volume)
   if (!Number.isFinite(volume)) volume = cur.volume
   volume = clamp(volume, 0, 1)
@@ -2741,8 +3098,9 @@ ipcMain.handle('pet:save-settings', (_e, settings) => {
     decreaseHintEnabled: bool(s.decreaseHintEnabled, cur.decreaseHintEnabled !== false),
     sound: bool(s.sound, cur.sound !== false),
     volume,
-    bounceStrength: (s.bounceStrength === 'soft' || s.bounceStrength === 'strong') ? s.bounceStrength : 'normal',
-    bubbleMode: (s.bubbleMode === 'always' || s.bubbleMode === 'click') ? s.bubbleMode : 'hover',
+    bounceStrength: oneOf(s.bounceStrength, ['minimal', 'soft', 'normal', 'strong'], cur.bounceStrength || 'normal'),
+    sleepMinutes,
+    bubbleMode: oneOf(s.bubbleMode, ['always', 'hover', 'click'], cur.bubbleMode || 'click'),
     clickSound: bool(s.clickSound, cur.clickSound !== false),
     clickSoundSet: (s.clickSoundSet === 'fx1' || s.clickSoundSet === 'custom') ? s.clickSoundSet : 'duck',
     quotesEnabled: bool(s.quotesEnabled, !!cur.quotesEnabled),
@@ -2753,7 +3111,7 @@ ipcMain.handle('pet:save-settings', (_e, settings) => {
     customImage: bool(s.customImage, !!cur.customImage),
     hotkey: bool(s.hotkey, cur.hotkey !== false),
     autoStart: bool(s.autoStart, !!cur.autoStart),
-    displayMode: (s.displayMode === 'taskbar' || s.displayMode === 'tray' || s.displayMode === 'hidden') ? s.displayMode : 'all',
+    displayMode: oneOf(s.displayMode, ['all', 'taskbar', 'tray', 'hidden'], cur.displayMode || 'tray'),
     alwaysOnTop: bool(s.alwaysOnTop, cur.alwaysOnTop !== false),
     showTime: bool(s.showTime, cur.showTime !== false),
     agentAnimationEnabled: bool(s.agentAnimationEnabled, !!cur.agentAnimationEnabled),
@@ -2830,6 +3188,18 @@ ipcMain.handle('pet:set-agent-state', (_e, { agent, state } = {}) => {
   })
   return { ok: true, ...payload }
 })
+ipcMain.handle('pet:wake-agent', (_e, { agent } = {}) => {
+  clearAgentIdleToSleepTimer()
+  const normalizedAgent = normalizeAgentId(agent || cfg.agentType)
+  const payload = queueAgentEvent(normalizedAgent, 'idle', {
+    force: true,
+    source: 'user-wake',
+    event: 'wake',
+    detail: 'idle',
+    suppressClick: true,
+  })
+  return { ok: true, ...payload }
+})
 ipcMain.handle('pet:set-idle', (_e, { idle }) => {
   if (petWin && !petWin.isDestroyed()) {
     petWin.setOpacity(idle ? 0.4 : 1)
@@ -2851,6 +3221,11 @@ ipcMain.handle('pet:update-bar', (_e, data) => {
   }
   return { ok: true }
 })
+ipcMain.handle('pet:get-update-status', () => updateStateSnapshot())
+ipcMain.handle('pet:check-for-updates', () => checkForUpdates())
+ipcMain.handle('pet:download-update', () => downloadUpdate())
+ipcMain.handle('pet:install-update', () => installUpdate())
+ipcMain.handle('pet:open-update-releases', () => openUpdateReleases())
 ipcMain.handle('pet:get-image-url', () => {
   const c = loadConfig()
   if (c.customImage && fs.existsSync(customImagePath())) {
@@ -2983,7 +3358,8 @@ if (!gotLock) {
                 hasAgentType: !!document.getElementById('agentTypeInput'),
                 hasAgentClick: !!document.getElementById('agentClickAnimationInput'),
                 hasAgentTest: !!document.getElementById('agentTestGrid'),
-                hasAgentSleepHint: document.body.innerText.includes('空闲 20 秒后自动进入睡眠'),
+                hasAgentSleepHint: document.body.innerText.includes('空闲达到上方分钟数后进入睡眠'),
+                hasSleepMinutes: !!document.getElementById('sleepMinutesInput'),
                 hasThreeAgentPanels: document.querySelectorAll('.agent-panel').length === 3,
                 hasCodexHookWrap: !!document.getElementById('codexHookWrap'),
                 hasCodexHook: !!document.getElementById('codexHookInput'),
@@ -3006,6 +3382,10 @@ if (!gotLock) {
                 hasHarnessHookInstall: !!document.getElementById('harnessHookInstallBtn'),
                 hasHarnessHookUninstall: !!document.getElementById('harnessHookUninstallBtn'),
                 hasHarnessTutorial: !!document.getElementById('harnessTutorialPanel'),
+                hasUpdateCheck: !!document.getElementById('updateCheckBtn'),
+                hasUpdateDownload: !!document.getElementById('updateDownloadBtn'),
+                hasUpdateInstall: !!document.getElementById('updateInstallBtn'),
+                hasUpdateReleases: !!document.getElementById('updateReleaseBtn'),
               }))()`
             )
             console.log('[smoke] settings=' + JSON.stringify(sinfo))

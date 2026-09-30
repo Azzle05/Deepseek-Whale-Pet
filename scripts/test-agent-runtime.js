@@ -22,12 +22,12 @@ function loadMainForTest(userDataPath, homes) {
   const originalSource = fs.readFileSync(mainPath, 'utf8')
   assert.match(
     originalSource,
-    /const AGENT_IDLE_TO_SLEEP_MS = 20000/,
-    'production idle-to-sleep timeout should remain 20 seconds',
+    /function agentIdleToSleepMs\(\)/,
+    'production sleep delay should be configurable',
   )
   const source = originalSource.replace(
-    'const AGENT_IDLE_TO_SLEEP_MS = 20000',
-    'const AGENT_IDLE_TO_SLEEP_MS = 45',
+    /function agentIdleToSleepMs\(\) \{[\s\S]*?\n\}/,
+    'function agentIdleToSleepMs() { return 45 }',
   ) + `
 module.exports.__agentRuntimeTest = {
   setConfig(patch) {
@@ -262,6 +262,11 @@ function testSettingsSurface() {
     'harnessHookUninstallBtn',
     'harnessTutorialBtn',
     'harnessTutorialPanel',
+    'sleepMinutesInput',
+    'updateCheckBtn',
+    'updateDownloadBtn',
+    'updateInstallBtn',
+    'updateReleaseBtn',
   ]
   for (const id of requiredIds) {
     assert.match(html, new RegExp('id="' + id + '"'), 'settings page should include #' + id)
@@ -270,7 +275,10 @@ function testSettingsSurface() {
   for (const label of ['Codex 首次配置', 'Claude Code 首次配置', 'Harness 首次配置']) {
     assert.match(html, new RegExp(label), 'settings page should include ' + label)
   }
-  assert.match(html, /空闲 20 秒后自动进入睡眠/, 'settings page should explain the sleep delay')
+  assert.match(html, /空闲达到上方分钟数后进入睡眠/, 'settings page should explain the configurable sleep delay')
+  assert.match(html, /data-agent-state="low_balance"/, 'settings page should expose low balance GIF testing')
+  assert.match(html, /data-agent-state="balance_increase"/, 'settings page should expose balance increase GIF testing')
+  assert.match(html, /data-agent-state="dragging"/, 'settings page should expose dragging GIF testing')
 }
 
 async function main() {

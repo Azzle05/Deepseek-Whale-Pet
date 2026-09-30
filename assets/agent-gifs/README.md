@@ -24,6 +24,9 @@ agent-gifs/
     hover/
     sleep/
     click/
+    low_balance/
+    balance_increase/
+    dragging/
 
   idle_codex/          # 可选，仅在 Codex 需要专属 idle 时创建
   think_claudecode/    # 可选，仅在 Claude Code 需要专属 think 时创建
@@ -102,6 +105,9 @@ at random each time the state is triggered.
 | `hover` | 鼠标悬停在桌宠上 / The pointer is hovering over the pet |
 | `sleep` | 长时间闲置 / The pet has been idle for a long time |
 | `click` | 点击桌宠 / The pet was clicked |
+| `low_balance` | 余额低于设置阈值 / Balance is below the configured threshold |
+| `balance_increase` | 后台检测到余额增长 / A background refresh detected an increased balance |
+| `dragging` | 正在拖动桌宠 / The pet is being dragged |
 
 ## GIF 规则 / GIF Rules
 
@@ -143,6 +149,7 @@ harness
 ```text
 idle link wait think tool run reply approval
 error interrupted done hover sleep click
+low_balance balance_increase dragging
 ```
 
 Codex 开启实验功能并选中 Codex 后，桌宠会自动尾随
@@ -211,3 +218,12 @@ Claude Hook 状态映射 / Claude Hook state mapping:
 - 单击一次播放一轮 `click` GIF；连续点击会延长循环，停止点击后在当前循环结束
   时淡出。 / One click plays one complete `click` loop; repeated clicks extend the
   loop and the animation fades after the final cycle.
+- `dragging` 在拖动超过阈值时显示，释放后回到基础 Agent 状态。
+  / `dragging` is shown after the pointer movement passes the drag threshold and
+  is released back to the base Agent state when dragging ends.
+- `balance_increase` 在后台余额上涨后短暂显示约 4 秒。
+  / `balance_increase` is shown briefly for about 4 seconds after a background
+  balance increase.
+- `low_balance` 在余额低于设置阈值时显示，恢复到阈值以上后回到基础状态。
+  / `low_balance` remains active while the balance is below the configured
+  threshold and returns to the base state after recovery.

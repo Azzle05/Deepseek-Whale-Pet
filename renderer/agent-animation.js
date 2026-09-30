@@ -8,11 +8,12 @@
   var MIN_DWELL_MS = 2000
   // Keep reasoning visible long enough before rapid tool events replace it.
   var DWELL_STATES = ['think', 'tool', 'run']
-  var PRIORITY_STATES = ['error', 'interrupted']
+  var PRIORITY_STATES = ['error', 'interrupted', 'dragging', 'balance_increase', 'low_balance']
   var AGENT_IDS = ['codex', 'claudecode', 'harness']
   var STATE_IDS = [
     'idle', 'link', 'wait', 'think', 'tool', 'run', 'reply',
     'approval', 'error', 'interrupted', 'done', 'hover', 'sleep', 'click',
+    'low_balance', 'balance_increase', 'dragging',
   ]
 
   var root = document.getElementById('root')
@@ -29,6 +30,8 @@
     clickEnabled: true,
   }
   var currentAgent = ''
+  var baseState = 'idle'
+  var baseForce = false
   var currentState = ''
   var desiredState = ''
   var currentLayer = -1
@@ -38,6 +41,10 @@
   var currentStateStartedAt = 0
   var hoverActive = false
   var lastNonHoverState = 'idle'
+  var draggingActive = false
+  var lowBalanceActive = false
+  var balanceIncreaseUntil = 0
+  var balanceIncreaseTimer = null
   var requestToken = 0
   var stateLoadCount = 0
   var acceptedEventId = ''
@@ -116,6 +123,33 @@
     }
   }
 
+  function clearBalanceIncrease() {
+    balanceIncreaseUntil = 0
+    if (balanceIncreaseTimer) {
+      clearTimeout(balanceIncreaseTimer)
+      balanceIncreaseTimer = null
+    }
+  }
+
+  function effectiveState() {
+    if (draggingActive) return 'dragging'
+    if (balanceIncreaseUntil > now()) return 'balance_increase'
+    if (lowBalanceActive) return 'low_balance'
+    if (hoverActive) return 'hover'
+    return baseState || 'idle'
+  }
+
+  function applyEffectiveState(options) {
+    if (!config.enabled) return
+    options = options || {}
+    var nextState = effectiveState()
+    requestState(nextState, {
+      force: !!options.force || baseForce,
+      allowDuringHover: nextState !== 'hover',
+    })
+    baseForce = false
+  }
+
   function setAgentMode(active) {
     root.classList.toggle('dshp-agent-mode', !!active)
     if (!active) root.classList.remove('dshp-agent-clicking')
@@ -137,6 +171,8 @@
       if (removeSources) layers[i].removeAttribute('src')
     }
     currentAgent = ''
+    baseState = 'idle'
+    baseForce = false
     currentState = ''
     desiredState = ''
     currentLayer = -1
@@ -168,6 +204,9 @@
   function stopAll() {
     hoverActive = false
     lastNonHoverState = 'idle'
+    draggingActive = false
+    lowBalanceActive = false
+    clearBalanceIncrease()
     resetStateLayers(true)
     stopClick(true)
   }
@@ -306,7 +345,7 @@
       acceptedEventId = options.eventId
     }
 
-    if (hoverActive && state !== 'hover') {
+    if (hoverActive && state !== 'hover' && !options.allowDuringHover) {
       lastNonHoverState = state
       return
     }
@@ -350,6 +389,19 @@
     })
   }
 
+  function setBaseState(rawState, options) {
+    options = options || {}
+    var state = normalizeState(rawState)
+    if (options.eventId) {
+      if (options.eventId === acceptedEventId) return
+      acceptedEventId = options.eventId
+    }
+    baseState = state
+    baseForce = !!options.force
+    lastNonHoverState = state
+    applyEffectiveState({ force: !!options.force })
+  }
+
   function configure(next) {
     if (!next) return
     var wasEnabled = config.enabled
@@ -366,7 +418,8 @@
     }
     if (!wasEnabled || previousAgent !== config.agent) {
       resetStateLayers(true)
-      requestState(hoverActive ? 'hover' : 'idle', { force: true })
+      baseState = 'idle'
+      applyEffectiveState({ force: true })
     }
   }
 
@@ -483,6 +536,31 @@
     })
   }
 
+  function setDragging(active) {
+    active = !!active
+    if (draggingActive === active) return
+    draggingActive = active
+    applyEffectiveState({ force: true })
+  }
+
+  function setLowBalance(active) {
+    active = !!active
+    if (lowBalanceActive === active) return
+    lowBalanceActive = active
+    applyEffectiveState({ force: true })
+  }
+
+  function pulseBalanceIncrease() {
+    clearBalanceIncrease()
+    balanceIncreaseUntil = now() + 4000
+    applyEffectiveState({ force: true })
+    balanceIncreaseTimer = setTimeout(function () {
+      balanceIncreaseTimer = null
+      balanceIncreaseUntil = 0
+      applyEffectiveState({ force: true })
+    }, 4000)
+  }
+
   function setHover(active) {
     active = !!active
     if (!config.enabled) {
@@ -493,12 +571,11 @@
 
     hoverActive = active
     if (active) {
-      if (currentState && currentState !== 'hover') lastNonHoverState = currentState
-      else if (desiredState && desiredState !== 'hover') lastNonHoverState = desiredState
-      requestState('hover', { force: true })
+      lastNonHoverState = baseState
+      applyEffectiveState({ force: true })
       return
     }
-    requestState(lastNonHoverState || 'idle', { force: true })
+    applyEffectiveState({ force: true })
   }
 
   configure({
@@ -510,7 +587,7 @@
   if (window.pet && window.pet.onAgentState) {
     window.pet.onAgentState(function (event) {
       if (!event || normalizeAgent(event.agent) !== config.agent) return
-      requestState(event.state, {
+      setBaseState(event.state, {
         force: !!event.force,
         eventId: event.eventId || '',
       })
@@ -519,8 +596,11 @@
 
   window.__dshpAgentAnimation = {
     configure: configure,
-    setState: function (state) { requestState(state, { force: true, manual: true }) },
+    setState: function (state) { setBaseState(state, { force: true, manual: true }) },
     setHover: setHover,
+    setDragging: setDragging,
+    setLowBalance: setLowBalance,
+    pulseBalanceIncrease: pulseBalanceIncrease,
     click: notifyClick,
     stop: stopAll,
     status: function () {
@@ -529,6 +609,10 @@
         agent: config.agent,
         state: currentState,
         desiredState: desiredState,
+        baseState: baseState,
+        draggingActive: draggingActive,
+        lowBalanceActive: lowBalanceActive,
+        balanceIncreaseActive: balanceIncreaseUntil > now(),
         layer: currentLayer,
         asset: currentAsset ? currentAsset.name : '',
         assetDurationMs: currentAsset ? assetDuration(currentAsset) : 0,

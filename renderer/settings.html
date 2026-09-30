@@ -105,6 +105,21 @@
     padding: 7px 12px; margin-bottom: 10px;
   }
   #imageBtn:hover, #audioBtn:hover { background: var(--teal-soft); border-color: #8dbab4; }
+  .update-actions { display: flex; flex-wrap: wrap; gap: 7px; margin: 2px 0 8px; }
+  .update-btn {
+    padding: 7px 11px; background: #fff; color: var(--teal-dark);
+    border: 1px solid #b9cfcb; margin: 0;
+  }
+  .update-btn:hover:not(:disabled) { background: var(--teal-soft); border-color: #8dbab4; }
+  .update-btn.primary { background: var(--teal-soft); border-color: #99c7c0; }
+  .update-btn.manual { color: #8b4a24; border-color: #e2bea9; background: #fff9f4; }
+  .update-btn:disabled { opacity: .48; cursor: not-allowed; }
+  .update-state {
+    min-height: 35px; padding: 8px 9px; margin-bottom: 9px;
+    border: 1px solid #dce6e4; border-radius: 7px; background: #f8fbfa;
+    color: #526361; font-size: 11px; line-height: 1.55; word-break: break-word;
+  }
+  .update-state strong { color: #294d48; }
   .agent-panel {
     padding: 12px 0 8px;
     border-top: 1px solid #e4ebea;
@@ -405,9 +420,25 @@
           <button class="agent-test-btn" type="button" data-agent-state="hover">悬停</button>
           <button class="agent-test-btn" type="button" data-agent-state="sleep">睡眠</button>
           <button class="agent-test-btn" type="button" data-agent-state="click">点击</button>
+          <button class="agent-test-btn" type="button" data-agent-state="low_balance">低余额</button>
+          <button class="agent-test-btn" type="button" data-agent-state="balance_increase">余额增长</button>
+          <button class="agent-test-btn" type="button" data-agent-state="dragging">拖动</button>
         </div>
+        <label class="field" for="sleepMinutesInput">睡眠时间</label>
+        <select id="sleepMinutesInput">
+          <option value="1">1 分钟</option>
+          <option value="2">2 分钟</option>
+          <option value="3">3 分钟</option>
+          <option value="5">5 分钟</option>
+          <option value="10" selected>10 分钟</option>
+          <option value="15">15 分钟</option>
+          <option value="20">20 分钟</option>
+          <option value="30">30 分钟</option>
+          <option value="45">45 分钟</option>
+          <option value="60">60 分钟</option>
+        </select>
         <div class="tip" style="margin-top:0;">
-          同一状态每 10 秒随机切换，GIF 使用 250ms 渐隐渐显。点击一次播放一轮；连续点击会保持循环。空闲 20 秒后自动进入睡眠。
+          同一状态每 10 秒随机切换，GIF 使用 250ms 渐隐渐显。点击一次播放一轮；连续点击会保持循环。空闲达到上方分钟数后进入睡眠，点击桌宠会唤醒。
         </div>
       </div>
     </div>
@@ -431,6 +462,7 @@
       </label>
       <label class="field" for="bounceStrengthInput">回弹程度</label>
       <select id="bounceStrengthInput">
+        <option value="minimal">极轻（几乎无回弹）</option>
         <option value="soft">温和（轻压）</option>
         <option value="normal">标准（默认）</option>
         <option value="strong">强劲（深压）</option>
@@ -453,8 +485,8 @@
         <label class="field" style="margin-bottom:6px;">气泡显示</label>
         <div class="radio-group" id="bubbleModeGroup">
           <label class="radio"><input type="radio" name="bubbleMode" value="always" /><span>不隐藏气泡</span></label>
-          <label class="radio"><input type="radio" name="bubbleMode" value="hover" checked /><span>隐藏并悬停显示</span></label>
-          <label class="radio"><input type="radio" name="bubbleMode" value="click" /><span>隐藏并点击显示</span></label>
+          <label class="radio"><input type="radio" name="bubbleMode" value="hover" /><span>隐藏并悬停显示</span></label>
+          <label class="radio"><input type="radio" name="bubbleMode" value="click" checked /><span>隐藏并点击显示</span></label>
         </div>
         <div class="tip">闲置时气泡完全收起，不挡鼠标；悬停或点击鲸鱼本体后展开。</div>
       </div>
@@ -527,9 +559,9 @@
       </label>
       <label class="field" style="margin-bottom:6px;">任务栏 / 托盘显示位置</label>
       <div class="radio-group" id="displayModeGroup">
-        <label class="radio"><input type="radio" name="displayMode" value="all" checked /><span>全显示（任务栏 + 托盘都有图标）</span></label>
+        <label class="radio"><input type="radio" name="displayMode" value="all" /><span>全显示（任务栏 + 托盘都有图标）</span></label>
         <label class="radio"><input type="radio" name="displayMode" value="taskbar" /><span>仅任务栏（只有任务栏图标）</span></label>
-        <label class="radio"><input type="radio" name="displayMode" value="tray" /><span>仅托盘（只有托盘图标）</span></label>
+        <label class="radio"><input type="radio" name="displayMode" value="tray" checked /><span>仅托盘（只有托盘图标）</span></label>
         <label class="radio"><input type="radio" name="displayMode" value="hidden" /><span>全隐藏（任务栏和托盘都没有图标）</span></label>
       </div>
       <div class="tip" style="margin-top:2px;">此选项只影响任务栏/托盘图标，与桌宠本体无关——小鲸鱼始终显示在桌面，是否置顶由上方「始终置顶」控制。</div>
@@ -537,6 +569,21 @@
         <input type="checkbox" id="snapInput" checked />
         <span>自动吸附屏幕边缘</span>
       </label>
+    </div>
+
+    <div class="group">
+      <h2>自动更新</h2>
+      <div class="update-state" id="updateStateText">
+        当前版本：<strong id="currentVersionText">--</strong><br />
+        <span id="updateMessageText">尚未检查更新。</span>
+      </div>
+      <div class="update-actions">
+        <button class="update-btn primary" id="updateCheckBtn" type="button">检查更新</button>
+        <button class="update-btn" id="updateDownloadBtn" type="button" disabled>下载更新</button>
+        <button class="update-btn" id="updateInstallBtn" type="button" disabled>安装并重启</button>
+        <button class="update-btn manual" id="updateReleaseBtn" type="button">打开 Releases</button>
+      </div>
+      <div class="tip">更新包只从项目 Releases 获取，并在安装前校验 SHA256；校验失败时保留当前版本。</div>
     </div>
   </div>
 

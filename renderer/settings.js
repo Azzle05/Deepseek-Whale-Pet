@@ -14,6 +14,7 @@ var showTimeInput = $('showTimeInput')
 var bounceInput = $('bounceInput')
 var decreaseHintInput = $('decreaseHintInput')
 var bounceStrengthInput = $('bounceStrengthInput')
+var sleepMinutesInput = $('sleepMinutesInput')
 var soundInput = $('soundInput')
 var volumeInput = $('volumeInput')
 var volumeValue = $('volumeValue')
@@ -78,6 +79,13 @@ var alwaysTopInput = $('alwaysTopInput')
 var saveBtn = $('saveBtn')
 var testBtn = $('testBtn')
 var statusEl = $('status')
+var currentVersionText = $('currentVersionText')
+var updateStateText = $('updateStateText')
+var updateMessageText = $('updateMessageText')
+var updateCheckBtn = $('updateCheckBtn')
+var updateDownloadBtn = $('updateDownloadBtn')
+var updateInstallBtn = $('updateInstallBtn')
+var updateReleaseBtn = $('updateReleaseBtn')
 
 function show(msg, cls) {
   statusEl.textContent = msg
@@ -99,8 +107,9 @@ window.pet.getFullConfig().then(function (c) {
   showTimeInput.checked = c.showTime !== false
   bounceInput.checked = c.bounceAnim !== false
   decreaseHintInput.checked = c.decreaseHintEnabled !== false
-  if (c.bounceStrength === 'soft' || c.bounceStrength === 'strong') bounceStrengthInput.value = c.bounceStrength
+  if (c.bounceStrength === 'minimal' || c.bounceStrength === 'soft' || c.bounceStrength === 'strong') bounceStrengthInput.value = c.bounceStrength
   else bounceStrengthInput.value = 'normal'
+  if (typeof c.sleepMinutes === 'number') sleepMinutesInput.value = String(c.sleepMinutes)
   soundInput.checked = c.sound !== false
   if (typeof c.volume === 'number') {
     volumeInput.value = Math.round(c.volume * 100)
@@ -131,7 +140,7 @@ window.pet.getFullConfig().then(function (c) {
   autoStartInput.checked = !!c.autoStart
   hotkeyInput.checked = c.hotkey !== false
   alwaysTopInput.checked = c.alwaysOnTop !== false
-  var dm = (c.displayMode === 'taskbar' || c.displayMode === 'tray' || c.displayMode === 'hidden') ? c.displayMode : 'all'
+  var dm = (c.displayMode === 'taskbar' || c.displayMode === 'tray' || c.displayMode === 'hidden') ? c.displayMode : 'tray'
   var dmRadio = document.querySelector('input[name=displayMode][value="' + dm + '"]')
   if (dmRadio) dmRadio.checked = true
   agentAnimationInput.checked = !!c.agentAnimationEnabled
@@ -164,9 +173,10 @@ function collect() {
     bounceAnim: bounceInput.checked,
     decreaseHintEnabled: decreaseHintInput.checked,
     bounceStrength: bounceStrengthInput.value,
+    sleepMinutes: Math.max(1, Math.min(60, Math.round(num(sleepMinutesInput.value, 10)))),
     sound: soundInput.checked,
     volume: Math.max(0, Math.min(1, num(volumeInput.value, 70) / 100)),
-    bubbleMode: (document.querySelector('input[name=bubbleMode]:checked') || {}).value || 'hover',
+    bubbleMode: (document.querySelector('input[name=bubbleMode]:checked') || {}).value || 'click',
     clickSound: clickSoundInput.checked,
     clickSoundSet: clickSoundSetInput.value,
     quotesEnabled: quotesInput.checked,
@@ -181,7 +191,7 @@ function collect() {
     autoStart: autoStartInput.checked,
     hotkey: hotkeyInput.checked,
     alwaysOnTop: alwaysTopInput.checked,
-    displayMode: (document.querySelector('input[name=displayMode]:checked') || {}).value || 'all',
+    displayMode: (document.querySelector('input[name=displayMode]:checked') || {}).value || 'tray',
     agentAnimationEnabled: agentAnimationInput.checked,
     agentType: agentTypeInput.value,
     agentClickAnimation: agentClickAnimationInput.checked,
@@ -277,6 +287,17 @@ function renderAgentStatus(status) {
   if (status.detail) eventParts.push(status.detail)
   agentLastEvent.textContent = eventParts.length ? eventParts.join(' · ') : '--'
   agentLastUpdate.textContent = formatAgentStatusTime(status.updatedAt)
+}
+
+function renderUpdateStatus(status) {
+  if (!status) return
+  currentVersionText.textContent = status.currentVersion ? 'v' + status.currentVersion : '--'
+  updateMessageText.textContent = status.message || '尚未检查更新。'
+  updateCheckBtn.disabled = status.phase === 'checking' || status.phase === 'downloading' || status.phase === 'installing'
+  updateDownloadBtn.disabled = !status.canDownload
+  updateInstallBtn.disabled = !status.readyToInstall
+  updateDownloadBtn.textContent = status.phase === 'downloading' ? '下载中…' : '下载更新'
+  updateInstallBtn.textContent = status.phase === 'installing' ? '正在安装…' : '安装并重启'
 }
 
 function renderCodexHookStatus(status) {
@@ -377,6 +398,8 @@ function refreshHarnessHookStatus() {
 
 window.pet.getAgentStatus().then(renderAgentStatus)
 if (window.pet.onAgentStatus) window.pet.onAgentStatus(renderAgentStatus)
+if (window.pet.getUpdateStatus) window.pet.getUpdateStatus().then(renderUpdateStatus)
+if (window.pet.onUpdateStatus) window.pet.onUpdateStatus(renderUpdateStatus)
 refreshCodexHookStatus()
 refreshClaudeHookStatus()
 refreshHarnessHookStatus()
@@ -394,6 +417,25 @@ claudeHookInput.addEventListener('change', function () {
 harnessHookInput.addEventListener('change', function () {
   toggleAgentAnimationOptions()
   setTimeout(refreshHarnessHookStatus, 700)
+})
+updateCheckBtn.addEventListener('click', async function () {
+  updateCheckBtn.disabled = true
+  updateMessageText.textContent = '正在检查最新版本…'
+  var result = await window.pet.checkForUpdates()
+  renderUpdateStatus(result)
+})
+updateDownloadBtn.addEventListener('click', async function () {
+  updateDownloadBtn.disabled = true
+  var result = await window.pet.downloadUpdate()
+  renderUpdateStatus(result)
+})
+updateInstallBtn.addEventListener('click', async function () {
+  updateInstallBtn.disabled = true
+  var result = await window.pet.installUpdate()
+  renderUpdateStatus(result)
+})
+updateReleaseBtn.addEventListener('click', function () {
+  window.pet.openUpdateReleases()
 })
 Array.prototype.forEach.call(document.querySelectorAll('input[name=contentMode]'), function (r) {
   r.addEventListener('change', toggleMemoryStyle)

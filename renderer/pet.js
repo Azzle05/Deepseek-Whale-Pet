@@ -7,6 +7,7 @@ var CLICK_SQ = 9
 var ANIM_MS = 700
 var CHANGE_MS = 900
 var BUBBLE_MS = 5000
+var AUDIO_GAIN = 0.65
 var LAST_VIEW_STORAGE_KEY = 'dshp.lastViewedBalance.v1'
 // 峰谷时段（北京时间）：工作日 9–12 与 14–18 点为高峰；2026-08-23 起周末全天谷价
 var PEAK_HOURS = [[9, 12], [14, 18]]
@@ -64,6 +65,8 @@ var state = {
   quotes: [],
   mem: null,
   todayUsed: null,
+  lastObservedBalance: null,
+  lastObservedCurrency: null,
   lastViewedBalance: null,
   lastViewedCurrency: null,
 }
@@ -81,6 +84,7 @@ var bubbleShown = false
 var bubbleHideTimer = null
 var peakShown = false
 var detailType = 'peak'
+var lastQuoteText = ''
 var hitCanvas = null
 var hitData = null
 var hitReady = false
@@ -121,6 +125,8 @@ var restoredLastView = readLastViewedBalance()
 if (restoredLastView) {
   state.lastViewedBalance = restoredLastView.balance
   state.lastViewedCurrency = restoredLastView.currency
+  state.lastObservedBalance = restoredLastView.balance
+  state.lastObservedCurrency = restoredLastView.currency
 }
 
 function publishBar() {
@@ -186,7 +192,14 @@ function applyFlags(c) {
   }
   if (typeof c.displayStyle === 'string') f.displayStyle = (c.displayStyle === 'bar') ? 'bar' : 'bubble'
   if (f.contentMode === 'memory') f.displayStyle = 'bubble'
-  if (typeof c.lowThreshold === 'number') state.lowThreshold = c.lowThreshold
+  if (typeof c.lowThreshold === 'number') {
+    state.lowThreshold = c.lowThreshold
+    if (window.__dshpAgentAnimation && window.__dshpAgentAnimation.setLowBalance) {
+      window.__dshpAgentAnimation.setLowBalance(
+        state.lowThreshold > 0 && state.balance !== null && Number(state.balance) < state.lowThreshold
+      )
+    }
+  }
   if (typeof c.customImage === 'boolean') f.customImage = c.customImage
   if (typeof c.agentAnimationEnabled === 'boolean') f.agentAnimationEnabled = c.agentAnimationEnabled
   if (typeof c.agentType === 'string') f.agentType = c.agentType
@@ -322,7 +335,8 @@ function makeAudio(src, volume) {
 function getVolume() {
   var v = state.flags.volume
   if (typeof v !== 'number' || !isFinite(v)) v = 0.7
-  return clamp(v, 0, 1)
+  // 设置里保留用户原本的百分比，只在播放时统一降低输出增益。
+  return clamp(v * AUDIO_GAIN, 0, 1)
 }
 function setVolume() {
   var pv = getVolume()
@@ -455,8 +469,11 @@ function renderPeak() {
 function renderQuote() {
   var q = randomQuote()
   if (!q) { renderPeak(); return }
+  var length = q.length
+  var size = length <= 16 ? 62 : (length <= 28 ? 54 : (length <= 48 ? 46 : (length <= 80 ? 38 : 32)))
   peakEl.className = 'dshp-quote'
   peakEl.textContent = q
+  peakEl.style.fontSize = 'calc(var(--dshp-u) * ' + size + ')'
 }
 function renderMemoryDetail() {
   var m = state.mem
@@ -530,8 +547,9 @@ function renderMemoryNormal() {
 // ---------------------------------------------------------------------------
 function bounce() {
   if (!state.flags.bounceAnim) return
-  var s = (state.flags.bounceStrength === 'soft' || state.flags.bounceStrength === 'strong') ? state.flags.bounceStrength : 'normal'
-  body.classList.remove('dshp-bounce-soft', 'dshp-bounce-normal', 'dshp-bounce-strong')
+  var s = state.flags.bounceStrength
+  if (s !== 'minimal' && s !== 'soft' && s !== 'strong') s = 'normal'
+  body.classList.remove('dshp-bounce-minimal', 'dshp-bounce-soft', 'dshp-bounce-normal', 'dshp-bounce-strong')
   void body.offsetWidth  // 强制重绘以重启动画
   body.classList.add('dshp-bounce-' + s)
 }
@@ -541,7 +559,13 @@ function bounce() {
 // ---------------------------------------------------------------------------
 function randomQuote() {
   if (!state.flags.quotesEnabled || state.quotes.length === 0) return null
-  return state.quotes[Math.floor(Math.random() * state.quotes.length)]
+  var candidates = state.quotes
+  if (state.quotes.length > 1 && lastQuoteText) {
+    candidates = state.quotes.filter(function (quote) { return quote !== lastQuoteText })
+  }
+  var quote = candidates[Math.floor(Math.random() * candidates.length)] || state.quotes[0]
+  lastQuoteText = quote
+  return quote
 }
 
 // ---------------------------------------------------------------------------
@@ -609,6 +633,7 @@ function showBubble() {
   if (!bubbleShown) {
     bubbleShown = true
     bubbleEl.classList.add('dshp-bubble-open')
+    if (peakShown && detailType === 'quote') renderQuote()
     settleViewedBalance()
   }
   if (bubbleHideTimer) { clearTimeout(bubbleHideTimer); bubbleHideTimer = null }
@@ -780,6 +805,19 @@ function refresh(manual) {
         state.granted = data.grantedBalance
         state.toppedUp = data.toppedUpBalance
         state.message = data.stale ? '网络抖动，沿用上次余额' : ''
+        var previousObserved = Number(state.lastObservedBalance)
+        var sameCurrency = !state.lastObservedCurrency || state.lastObservedCurrency === nc
+        var balanceIncreased = isFinite(previousObserved) && sameCurrency && nb > previousObserved + 0.000001
+        state.lastObservedBalance = nb
+        state.lastObservedCurrency = nc
+        if (window.__dshpAgentAnimation) {
+          if (balanceIncreased && window.__dshpAgentAnimation.pulseBalanceIncrease) {
+            window.__dshpAgentAnimation.pulseBalanceIncrease()
+          }
+          if (window.__dshpAgentAnimation.setLowBalance) {
+            window.__dshpAgentAnimation.setLowBalance(state.lowThreshold > 0 && nb < state.lowThreshold)
+          }
+        }
         // 内存模式下只更新余额数据备用，不触碰桌宠/气泡显示，避免覆盖内存占用画面
         if (state.flags.contentMode === 'memory') {
           state.status = 'ok'
@@ -938,6 +976,18 @@ function scheduleExpress() {
   })
 }
 
+function setAgentDragging(active) {
+  if (window.__dshpAgentAnimation && window.__dshpAgentAnimation.setDragging) {
+    window.__dshpAgentAnimation.setDragging(active)
+  }
+}
+
+function isAgentSleeping() {
+  if (!window.__dshpAgentAnimation || !window.__dshpAgentAnimation.status) return false
+  var status = window.__dshpAgentAnimation.status()
+  return !!status.enabled && (status.state === 'sleep' || status.desiredState === 'sleep')
+}
+
 function onPointerDown(e) {
   if (e.button !== 0) return
   // 点气泡：切换峰值显示 + 播放点击音效，不触发拖拽
@@ -965,7 +1015,12 @@ function onPointerDown(e) {
     w: rect.width,
     h: rect.height,
     moved: false,
+    suppressAgentClick: false,
     vp: screen.workArea
+  }
+  if (isAgentSleeping()) {
+    drag.suppressAgentClick = true
+    if (window.pet.wakeAgent) window.pet.wakeAgent(state.flags.agentType).catch(function () {})
   }
   root.classList.add('dshp-dragging')
   pressDown()
@@ -981,7 +1036,10 @@ function onPointerMove(e) {
   if (!drag || !drag.active || !drag.ready) return
   var mx = e.screenX - drag.startScreenX
   var my = e.screenY - drag.startScreenY
-  if (mx * mx + my * my >= CLICK_SQ) drag.moved = true
+  if (!drag.moved && mx * mx + my * my >= CLICK_SQ) {
+    drag.moved = true
+    setAgentDragging(true)
+  }
   var wa = drag.vp
   state.left = clamp(e.screenX - drag.grabX, wa.x, Math.max(wa.x, wa.x + wa.width - drag.w))
   state.top = clamp(e.screenY - drag.grabY, wa.y, Math.max(wa.y, wa.y + wa.height - drag.h))
@@ -990,14 +1048,16 @@ function onPointerMove(e) {
 
 function endDrag(e, clickAllowed) {
   if (!drag || !drag.active) return
+  var suppressAgentClick = !!drag.suppressAgentClick
   drag.active = false
+  setAgentDragging(false)
   pressUp()
   root.classList.remove('dshp-dragging')
   try {
     if (root.hasPointerCapture && root.hasPointerCapture(e.pointerId)) root.releasePointerCapture(e.pointerId)
   } catch (err) {}
   if (clickAllowed && !drag.moved) {
-    if (window.__dshpAgentAnimation) window.__dshpAgentAnimation.click()
+    if (!suppressAgentClick && window.__dshpAgentAnimation) window.__dshpAgentAnimation.click()
     refresh(true)
     showBubble()
     return
@@ -1028,12 +1088,14 @@ function endDrag(e, clickAllowed) {
 
 // 按压时从顶部往下压扁、底部不动、微加宽，模拟被压的 Q 弹手感；强度随设置变化
 var SQUISHES = {
-  soft:   'scale(1.03, 0.86)',
-  normal: 'scale(1.05, 0.72)',
-  strong: 'scale(1.10, 0.55)',
+  minimal: 'scale(1.01, 0.94)',
+  soft:    'scale(1.02, 0.90)',
+  normal:  'scale(1.035, 0.84)',
+  strong:  'scale(1.055, 0.76)',
 }
 function squish() {
-  var s = (state.flags.bounceStrength === 'soft' || state.flags.bounceStrength === 'strong') ? state.flags.bounceStrength : 'normal'
+  var s = state.flags.bounceStrength
+  if (SQUISHES[s] === undefined) s = 'normal'
   return SQUISHES[s] || SQUISHES.normal
 }
 function pressDown() {

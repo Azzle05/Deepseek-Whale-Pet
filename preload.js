@@ -25,6 +25,12 @@ contextBridge.exposeInMainWorld('pet', {
   updateBar: (data) => ipcRenderer.invoke('pet:update-bar', data),
   // 系统内存
   getMemory: () => ipcRenderer.invoke('pet:get-memory'),
+  // 自动更新
+  getUpdateStatus: () => ipcRenderer.invoke('pet:get-update-status'),
+  checkForUpdates: () => ipcRenderer.invoke('pet:check-for-updates'),
+  downloadUpdate: () => ipcRenderer.invoke('pet:download-update'),
+  installUpdate: () => ipcRenderer.invoke('pet:install-update'),
+  openUpdateReleases: () => ipcRenderer.invoke('pet:open-update-releases'),
   // 闲置透明度
   setIdle: (idle) => ipcRenderer.invoke('pet:set-idle', { idle }),
   // 鼠标穿透（闲置时透明区域不挡点击）
@@ -48,6 +54,7 @@ contextBridge.exposeInMainWorld('pet', {
   installHarnessHook: () => ipcRenderer.invoke('pet:install-harness-hook'),
   uninstallHarnessHook: () => ipcRenderer.invoke('pet:uninstall-harness-hook'),
   setAgentState: (agent, state) => ipcRenderer.invoke('pet:set-agent-state', { agent, state }),
+  wakeAgent: (agent) => ipcRenderer.invoke('pet:wake-agent', { agent }),
   // 事件
   onRefreshRequested: (cb) => {
     const listener = () => cb()
@@ -73,6 +80,11 @@ contextBridge.exposeInMainWorld('pet', {
     const listener = (_e, data) => cb(data)
     ipcRenderer.on('pet:agent-status', listener)
     return () => ipcRenderer.removeListener('pet:agent-status', listener)
+  },
+  onUpdateStatus: (cb) => {
+    const listener = (_e, data) => cb(data)
+    ipcRenderer.on('pet:update-status', listener)
+    return () => ipcRenderer.removeListener('pet:update-status', listener)
   },
   // 其它
   openSettings: () => ipcRenderer.invoke('pet:open-settings'),
