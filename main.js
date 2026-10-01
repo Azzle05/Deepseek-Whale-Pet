@@ -12,7 +12,7 @@ const fs = require('node:fs')
 const os = require('node:os')
 const crypto = require('node:crypto')
 const { spawn } = require('node:child_process')
-const { Readable } = require('node:stream')
+const { Readable, Transform } = require('node:stream')
 const { pipeline } = require('node:stream/promises')
 const { pathToFileURL } = require('node:url')
 
@@ -261,6 +261,11 @@ let agentRuntimeStatus = {
   claudeHookPath: '',
   harnessHookWatcherActive: false,
   harnessHookPath: '',
+}
+let agentStatusByAgent = {
+  codex: { agent: 'codex', source: '', state: '', event: '', detail: '', updatedAt: 0 },
+  claudecode: { agent: 'claudecode', source: '', state: '', event: '', detail: '', updatedAt: 0 },
+  harness: { agent: 'harness', source: '', state: '', event: '', detail: '', updatedAt: 0 },
 }
 let codexWatcher = null
 let codexHookWatcher = null
@@ -626,6 +631,11 @@ let updateState = {
   canDownload: false,
   readyToInstall: false,
   downloadable: false,
+  releaseNotes: '',
+  downloadProgress: 0,
+  downloadedBytes: 0,
+  totalBytes: 0,
+  sha256Verified: false,
   releasesUrl: UPDATE_RELEASES_URL,
 }
 
@@ -700,6 +710,11 @@ async function checkForUpdates() {
     canDownload: false,
     readyToInstall: false,
     downloadable: false,
+    releaseNotes: '',
+    downloadProgress: 0,
+    downloadedBytes: 0,
+    totalBytes: 0,
+    sha256Verified: false,
   })
 
   try {
@@ -727,6 +742,7 @@ async function checkForUpdates() {
       } : null,
       sha256,
       htmlUrl: String(release.html_url || UPDATE_RELEASES_URL),
+      releaseNotes: String(release.body || '').trim(),
     }
 
     if (!updateAvailable) {
@@ -738,6 +754,7 @@ async function checkForUpdates() {
         canDownload: false,
         readyToInstall: false,
         downloadable: false,
+        releaseNotes: latestUpdateRelease.releaseNotes,
       })
     }
     if (!asset || !assetName || !sha256) {
@@ -749,6 +766,7 @@ async function checkForUpdates() {
         canDownload: false,
         readyToInstall: false,
         downloadable: false,
+        releaseNotes: latestUpdateRelease.releaseNotes,
       })
     }
     return setUpdateState({
@@ -759,6 +777,7 @@ async function checkForUpdates() {
       canDownload: true,
       readyToInstall: false,
       downloadable: true,
+      releaseNotes: latestUpdateRelease.releaseNotes,
     })
   } catch (err) {
     return setUpdateState({
@@ -817,13 +836,52 @@ async function downloadUpdate() {
         updateAvailable: true,
         canDownload: false,
         readyToInstall: false,
+        downloadProgress: 0,
+        downloadedBytes: 0,
+        totalBytes: Number(release.asset.size) || 0,
+        sha256Verified: false,
       })
       const response = await fetch(release.asset.url, {
         headers: { 'User-Agent': 'DeepSeek-Whale-Pet/' + app.getVersion() },
         signal: AbortSignal.timeout(300000),
       })
       if (!response.ok || !response.body) throw new Error('下载 HTTP ' + response.status)
-      await pipeline(Readable.fromWeb(response.body), fs.createWriteStream(destination))
+      const totalBytes = Number(response.headers.get('content-length'))
+        || Number(release.asset.size)
+        || 0
+      let downloadedBytes = 0
+      let lastProgressAt = 0
+      const progressStream = new Transform({
+        transform(chunk, _encoding, callback) {
+          downloadedBytes += chunk.length
+          const now = Date.now()
+          if (now - lastProgressAt >= 200 || (totalBytes && downloadedBytes >= totalBytes)) {
+            lastProgressAt = now
+            const progress = totalBytes
+              ? Math.min(100, Math.round((downloadedBytes / totalBytes) * 100))
+              : 0
+            setUpdateState({
+              phase: 'downloading',
+              message: totalBytes
+                ? '正在下载更新包… ' + progress + '%'
+                : '正在下载更新包… ' + formatBytes(downloadedBytes),
+              downloadProgress: progress,
+              downloadedBytes,
+              totalBytes,
+            })
+          }
+          callback(null, chunk)
+        },
+      })
+      await pipeline(Readable.fromWeb(response.body), progressStream, fs.createWriteStream(destination))
+      setUpdateState({
+        phase: 'verifying',
+        message: '下载完成，正在校验 SHA256…',
+        downloadProgress: 100,
+        downloadedBytes,
+        totalBytes,
+        sha256Verified: false,
+      })
       const actualSha256 = await sha256File(destination)
       if (actualSha256 !== release.sha256) {
         try { fs.unlinkSync(destination) } catch { /* ignore */ }
@@ -836,6 +894,10 @@ async function downloadUpdate() {
         updateAvailable: true,
         canDownload: false,
         readyToInstall: true,
+        downloadProgress: 100,
+        downloadedBytes,
+        totalBytes,
+        sha256Verified: true,
       })
     } catch (err) {
       downloadedUpdatePath = ''
@@ -845,12 +907,22 @@ async function downloadUpdate() {
         updateAvailable: true,
         canDownload: true,
         readyToInstall: false,
+        sha256Verified: false,
       })
     } finally {
       updateDownloadInFlight = null
     }
   })()
   return updateDownloadInFlight
+}
+
+function formatBytes(bytes) {
+  const value = Number(bytes)
+  if (!Number.isFinite(value) || value <= 0) return '0 B'
+  if (value < 1024) return Math.round(value) + ' B'
+  if (value < 1024 * 1024) return (value / 1024).toFixed(1) + ' KB'
+  if (value < 1024 * 1024 * 1024) return (value / (1024 * 1024)).toFixed(1) + ' MB'
+  return (value / (1024 * 1024 * 1024)).toFixed(2) + ' GB'
 }
 
 function portableExecutablePath() {
@@ -888,18 +960,32 @@ async function installUpdate() {
   const targetFile = portableExecutablePath()
   const helperDir = path.dirname(downloadedUpdatePath)
   const helperPath = path.join(helperDir, 'apply-update.ps1')
+  const backupFile = path.join(helperDir, 'previous-version-backup.exe')
   const script = [
-    'param([int]$TargetProcessId, [string]$DownloadedFile, [string]$TargetFile)',
+    'param([int]$TargetProcessId, [string]$DownloadedFile, [string]$TargetFile, [string]$BackupFile)',
     '$ErrorActionPreference = "Stop"',
     '$deadline = (Get-Date).AddMinutes(2)',
     'while (Get-Process -Id $TargetProcessId -ErrorAction SilentlyContinue) {',
     '  if ((Get-Date) -gt $deadline) { exit 2 }',
     '  Start-Sleep -Milliseconds 300',
     '}',
-    'Copy-Item -LiteralPath $DownloadedFile -Destination $TargetFile -Force',
-    'Start-Process -FilePath $TargetFile',
-    'Start-Sleep -Milliseconds 500',
+    'if (-not (Test-Path -LiteralPath $DownloadedFile)) { throw "Downloaded update is missing" }',
+    'Copy-Item -LiteralPath $TargetFile -Destination $BackupFile -Force',
+    'if (-not (Test-Path -LiteralPath $BackupFile)) { throw "Backup creation failed" }',
+    'try {',
+    '  Copy-Item -LiteralPath $DownloadedFile -Destination $TargetFile -Force',
+    '  $newProcess = Start-Process -FilePath $TargetFile -PassThru',
+    '  Start-Sleep -Seconds 5',
+    '  if ($null -eq $newProcess -or $newProcess.HasExited) { throw "Updated application failed to start" }',
+    '} catch {',
+    '  Copy-Item -LiteralPath $BackupFile -Destination $TargetFile -Force',
+    '  Start-Process -FilePath $TargetFile',
+    '  Start-Sleep -Milliseconds 500',
+    '  throw',
+    '}',
     'Remove-Item -LiteralPath $DownloadedFile -Force -ErrorAction SilentlyContinue',
+    'Remove-Item -LiteralPath $BackupFile -Force -ErrorAction SilentlyContinue',
+    'Start-Sleep -Seconds 1',
     'Remove-Item -LiteralPath (Split-Path -Parent $MyInvocation.MyCommand.Path) -Recurse -Force -ErrorAction SilentlyContinue',
   ].join('\r\n')
 
@@ -913,6 +999,7 @@ async function installUpdate() {
       String(process.pid),
       downloadedUpdatePath,
       targetFile,
+      backupFile,
     ], {
       detached: true,
       windowsHide: true,
@@ -924,6 +1011,8 @@ async function installUpdate() {
       message: '正在退出旧版本并安装更新…',
       readyToInstall: false,
       canDownload: false,
+      downloadProgress: 100,
+      sha256Verified: true,
     })
     setTimeout(() => app.quit(), 150)
     return updateStateSnapshot()
@@ -1544,6 +1633,7 @@ function codexHookInstallStatus() {
 
 function codexHookStatusSnapshot() {
   const status = codexHookInstallStatus()
+  const latest = agentStatusByAgent.codex || {}
   return {
     ...status,
     detected: fs.existsSync(codexHomePath()),
@@ -1552,6 +1642,11 @@ function codexHookStatusSnapshot() {
     desired: !!cfg.agentAnimationEnabled && !!cfg.codexHookEnabled,
     watcherActive: !!agentRuntimeStatus.hookWatcherActive,
     watcherPath: agentRuntimeStatus.hookPath || '',
+    lastSource: latest.source || '',
+    lastEvent: latest.event || '',
+    lastState: latest.state || '',
+    lastDetail: latest.detail || '',
+    lastUpdatedAt: Number(latest.updatedAt) || 0,
   }
 }
 
@@ -1745,6 +1840,7 @@ function claudeHookInstallStatus() {
 
 function claudeHookStatusSnapshot() {
   const status = claudeHookInstallStatus()
+  const latest = agentStatusByAgent.claudecode || {}
   return {
     ...status,
     detected: fs.existsSync(claudeHomePath()),
@@ -1753,6 +1849,11 @@ function claudeHookStatusSnapshot() {
     desired: !!cfg.agentAnimationEnabled && !!cfg.claudeHookEnabled,
     watcherActive: !!agentRuntimeStatus.claudeHookWatcherActive,
     watcherPath: agentRuntimeStatus.claudeHookPath || '',
+    lastSource: latest.source || '',
+    lastEvent: latest.event || '',
+    lastState: latest.state || '',
+    lastDetail: latest.detail || '',
+    lastUpdatedAt: Number(latest.updatedAt) || 0,
   }
 }
 
@@ -2012,6 +2113,7 @@ function harnessHookInstallStatus() {
 
 function harnessHookStatusSnapshot() {
   const status = harnessHookInstallStatus()
+  const latest = agentStatusByAgent.harness || {}
   return {
     ...status,
     detected: fs.existsSync(harnessHomePath()),
@@ -2020,6 +2122,11 @@ function harnessHookStatusSnapshot() {
     desired: !!cfg.agentAnimationEnabled && !!cfg.harnessHookEnabled,
     watcherActive: !!agentRuntimeStatus.harnessHookWatcherActive,
     watcherPath: agentRuntimeStatus.harnessHookPath || '',
+    lastSource: latest.source || '',
+    lastEvent: latest.event || '',
+    lastState: latest.state || '',
+    lastDetail: latest.detail || '',
+    lastUpdatedAt: Number(latest.updatedAt) || 0,
   }
 }
 
@@ -2201,8 +2308,9 @@ function startHarnessHookWatcher() {
 }
 
 function agentStatusSnapshot() {
-  const updatedAt = Number(agentRuntimeStatus.updatedAt) || 0
   const selectedAgent = normalizeAgentId(cfg.agentType)
+  const selectedStatus = agentStatusByAgent[selectedAgent] || {}
+  const updatedAt = Number(selectedStatus.updatedAt) || 0
   let hookEnabled = !!cfg.codexHookEnabled
   let hookWatcherActive = !!agentRuntimeStatus.hookWatcherActive
   let hookPath = agentRuntimeStatus.hookPath || ''
@@ -2225,17 +2333,22 @@ function agentStatusSnapshot() {
     enabled: !!cfg.agentAnimationEnabled,
     selectedAgent,
     connected: updatedAt > 0 && Date.now() - updatedAt < AGENT_STATUS_FRESH_MS,
-    source: agentRuntimeStatus.source,
-    agent: agentRuntimeStatus.agent,
-    state: agentRuntimeStatus.state,
-    event: agentRuntimeStatus.event,
-    detail: agentRuntimeStatus.detail,
+    source: selectedStatus.source || '',
+    agent: selectedStatus.agent || selectedAgent,
+    state: selectedStatus.state || '',
+    event: selectedStatus.event || '',
+    detail: selectedStatus.detail || '',
     updatedAt,
     watcherActive,
     watcherPath,
     hookEnabled,
     hookWatcherActive,
     hookPath,
+    agents: {
+      codex: { ...agentStatusByAgent.codex },
+      claudecode: { ...agentStatusByAgent.claudecode },
+      harness: { ...agentStatusByAgent.harness },
+    },
   }
 }
 
@@ -2259,6 +2372,17 @@ function sendAgentState(rawAgent, rawState, options = {}) {
     detail: compactAgentDetail(options.detail),
   }
   latestAgentEvent = payload
+  agentStatusByAgent = {
+    ...agentStatusByAgent,
+    [payload.agent]: {
+      agent: payload.agent,
+      source: payload.source,
+      state: payload.state,
+      event: payload.event,
+      detail: payload.detail,
+      updatedAt: timestamp,
+    },
+  }
   agentRuntimeStatus = {
     ...agentRuntimeStatus,
     source: payload.source,
@@ -2966,15 +3090,16 @@ function startCodexSessionWatcher() {
 function updateAgentWatcher() {
   const selectedAgent = normalizeAgentId(cfg.agentType)
   const animationEnabled = !!cfg.agentAnimationEnabled
-  const shouldWatchCodex = animationEnabled && selectedAgent === 'codex'
-  const shouldWatchClaude = animationEnabled && selectedAgent === 'claudecode'
-  const shouldWatchHarness = animationEnabled && selectedAgent === 'harness'
+  const shouldWatchCodexSession = animationEnabled && selectedAgent === 'codex' && !cfg.codexHookEnabled
+  const shouldWatchCodexHook = animationEnabled && !!cfg.codexHookEnabled
+  const shouldWatchClaude = animationEnabled && !!cfg.claudeHookEnabled
+  const shouldWatchHarness = animationEnabled && !!cfg.harnessHookEnabled
 
   if (!animationEnabled) clearAgentIdleToSleepTimer()
-  if (!shouldWatchCodex) clearCodexDoneIdleTimer()
-  if (shouldWatchCodex) startCodexSessionWatcher()
+  if (!shouldWatchCodexSession) clearCodexDoneIdleTimer()
+  if (shouldWatchCodexSession) startCodexSessionWatcher()
   else stopCodexSessionWatcher()
-  if (shouldWatchCodex && cfg.codexHookEnabled) startCodexHookWatcher()
+  if (shouldWatchCodexHook) startCodexHookWatcher()
   else stopCodexHookWatcher()
 
   if (!shouldWatchClaude) clearClaudeDoneIdleTimer()

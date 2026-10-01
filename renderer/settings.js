@@ -36,6 +36,8 @@ var codexHookStatusDot = $('codexHookStatusDot')
 var codexHookStatusText = $('codexHookStatusText')
 var codexHookEventCount = $('codexHookEventCount')
 var codexHookRuntimeText = $('codexHookRuntimeText')
+var codexHookLastEvent = $('codexHookLastEvent')
+var codexHookLastSource = $('codexHookLastSource')
 var codexHookInstallBtn = $('codexHookInstallBtn')
 var codexHookUninstallBtn = $('codexHookUninstallBtn')
 var codexDetectedText = $('codexDetectedText')
@@ -47,6 +49,8 @@ var claudeHookStatusDot = $('claudeHookStatusDot')
 var claudeHookStatusText = $('claudeHookStatusText')
 var claudeHookEventCount = $('claudeHookEventCount')
 var claudeHookRuntimeText = $('claudeHookRuntimeText')
+var claudeHookLastEvent = $('claudeHookLastEvent')
+var claudeHookLastSource = $('claudeHookLastSource')
 var claudeHookInstallBtn = $('claudeHookInstallBtn')
 var claudeHookUninstallBtn = $('claudeHookUninstallBtn')
 var claudeDetectedText = $('claudeDetectedText')
@@ -58,6 +62,8 @@ var harnessHookStatusDot = $('harnessHookStatusDot')
 var harnessHookStatusText = $('harnessHookStatusText')
 var harnessHookEventCount = $('harnessHookEventCount')
 var harnessHookRuntimeText = $('harnessHookRuntimeText')
+var harnessHookLastEvent = $('harnessHookLastEvent')
+var harnessHookLastSource = $('harnessHookLastSource')
 var harnessHookInstallBtn = $('harnessHookInstallBtn')
 var harnessHookUninstallBtn = $('harnessHookUninstallBtn')
 var harnessDetectedText = $('harnessDetectedText')
@@ -67,7 +73,12 @@ var agentTestGrid = $('agentTestGrid')
 var agentStatusDot = $('agentStatusDot')
 var agentStatusText = $('agentStatusText')
 var agentLastEvent = $('agentLastEvent')
+var agentLastSource = $('agentLastSource')
 var agentLastUpdate = $('agentLastUpdate')
+var updateProgressWrap = $('updateProgressWrap')
+var updateProgressBar = $('updateProgressBar')
+var updateProgressText = $('updateProgressText')
+var updateNotes = $('updateNotes')
 var preferredDisplayStyle = 'bubble'
 var scaleInput = $('scaleInput')
 var scaleValue = $('scaleValue')
@@ -260,6 +271,18 @@ function formatAgentStatusTime(timestamp) {
   return p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds())
 }
 
+function formatAgentEvent(record) {
+  if (!record) return '--'
+  var parts = []
+  var event = record.event || record.lastEvent || ''
+  var state = record.state || record.lastState || ''
+  var detail = record.detail || record.lastDetail || ''
+  if (event) parts.push(event)
+  if (state) parts.push(state)
+  if (detail) parts.push(detail)
+  return parts.length ? parts.join(' · ') : '--'
+}
+
 function renderAgentStatus(status) {
   if (!status) return
   var connected = !!status.connected
@@ -286,7 +309,15 @@ function renderAgentStatus(status) {
   if (status.state) eventParts.push(status.state)
   if (status.detail) eventParts.push(status.detail)
   agentLastEvent.textContent = eventParts.length ? eventParts.join(' · ') : '--'
+  agentLastSource.textContent = status.source || '--'
   agentLastUpdate.textContent = formatAgentStatusTime(status.updatedAt)
+  var agents = status.agents || {}
+  codexHookLastEvent.textContent = formatAgentEvent(agents.codex)
+  codexHookLastSource.textContent = agents.codex && agents.codex.source || '--'
+  claudeHookLastEvent.textContent = formatAgentEvent(agents.claudecode)
+  claudeHookLastSource.textContent = agents.claudecode && agents.claudecode.source || '--'
+  harnessHookLastEvent.textContent = formatAgentEvent(agents.harness)
+  harnessHookLastSource.textContent = agents.harness && agents.harness.source || '--'
 }
 
 function renderUpdateStatus(status) {
@@ -298,6 +329,27 @@ function renderUpdateStatus(status) {
   updateInstallBtn.disabled = !status.readyToInstall
   updateDownloadBtn.textContent = status.phase === 'downloading' ? '下载中…' : '下载更新'
   updateInstallBtn.textContent = status.phase === 'installing' ? '正在安装…' : '安装并重启'
+  var progress = Math.max(0, Math.min(100, Number(status.downloadProgress) || 0))
+  var showProgress = status.phase === 'downloading' || status.phase === 'verifying'
+  updateProgressWrap.className = 'update-progress' + (showProgress ? ' show' : '')
+  updateProgressBar.style.width = progress + '%'
+  updateProgressText.className = 'update-progress-meta' + (showProgress ? ' show' : '')
+  if (showProgress) {
+    var bytes = formatBytes(status.downloadedBytes || 0) + (status.totalBytes ? ' / ' + formatBytes(status.totalBytes) : '')
+    var verified = status.sha256Verified ? ' · <span class="update-verified">SHA256 已通过</span>' : ''
+    updateProgressText.innerHTML = bytes + verified
+  }
+  var notes = String(status.releaseNotes || '').trim()
+  updateNotes.className = 'update-notes' + (notes && status.updateAvailable ? ' show' : '')
+  updateNotes.textContent = notes
+}
+
+function formatBytes(bytes) {
+  var value = Number(bytes) || 0
+  if (value < 1024) return Math.round(value) + ' B'
+  if (value < 1024 * 1024) return (value / 1024).toFixed(1) + ' KB'
+  if (value < 1024 * 1024 * 1024) return (value / (1024 * 1024)).toFixed(1) + ' MB'
+  return (value / (1024 * 1024 * 1024)).toFixed(2) + ' GB'
 }
 
 function renderCodexHookStatus(status) {
@@ -307,6 +359,8 @@ function renderCodexHookStatus(status) {
   codexHookStatusDot.className = 'agent-status-dot' + (installed ? ' on' : '')
   codexHookEventCount.textContent = String(status.installedEvents || 0) + ' / ' + String(status.totalEvents || 0)
   codexHookRuntimeText.textContent = active ? '正在监听事件文件' : '尚未监听'
+  codexHookLastEvent.textContent = formatAgentEvent(status)
+  codexHookLastSource.textContent = status.lastSource || '--'
   codexHookUninstallBtn.disabled = !installed && !Number(status.installedEvents)
   codexDetectedText.textContent = status.detected
     ? '已检测到本机 Codex 配置'
@@ -339,6 +393,8 @@ function renderClaudeHookStatus(status) {
   claudeHookStatusDot.className = 'agent-status-dot' + (installed ? ' on' : '')
   claudeHookEventCount.textContent = String(status.installedEvents || 0) + ' / ' + String(status.totalEvents || 0)
   claudeHookRuntimeText.textContent = active ? '正在监听事件文件' : '尚未监听'
+  claudeHookLastEvent.textContent = formatAgentEvent(status)
+  claudeHookLastSource.textContent = status.lastSource || '--'
   claudeHookUninstallBtn.disabled = !installed && !Number(status.installedEvents)
   claudeDetectedText.textContent = status.detected
     ? '已检测到本机 Claude Code 配置'
@@ -371,6 +427,8 @@ function renderHarnessHookStatus(status) {
   harnessHookStatusDot.className = 'agent-status-dot' + (installed ? ' on' : '')
   harnessHookEventCount.textContent = String(status.installedEvents || 0) + ' / ' + String(status.totalEvents || 0)
   harnessHookRuntimeText.textContent = active ? '正在监听事件文件' : '尚未监听'
+  harnessHookLastEvent.textContent = formatAgentEvent(status)
+  harnessHookLastSource.textContent = status.lastSource || '--'
   harnessHookUninstallBtn.disabled = !installed && !Number(status.installedEvents)
   harnessDetectedText.textContent = status.detected
     ? '已检测到本机 Harness 配置'

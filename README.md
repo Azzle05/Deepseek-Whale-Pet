@@ -14,7 +14,7 @@
 [GitHub 仓库](https://github.com/Azzle05/Deepseek-Whale-Pet) |
 [最新版本](https://github.com/Azzle05/Deepseek-Whale-Pet/releases/latest)
 
-**当前版本 / Current release:** v1.6.3
+**当前版本 / Current release:** v1.7.0
 
 **维护者 / Maintainer:** Azzle
 
@@ -31,7 +31,7 @@
 - **桌面交互**：拖拽、边缘吸附、左侧镜像、`60%-300%` 缩放、按压回弹和点击音效。
 - **气泡控制**：支持常显、悬停显示、点击显示三种模式。
 - **托盘运行**：运行时可隐藏任务栏入口，并通过托盘菜单操作。
-- **自动更新**：从 GitHub Releases 检查新版，下载便携版并校验 SHA256 后替换重启；校验失败时保留旧版本。
+- **自动更新**：从 GitHub Releases 检查新版，显示版本说明、下载进度和 SHA256 校验结果；替换或启动失败时自动恢复旧版本。
 - **Agent 状态动画（实验性）**：支持 Codex、Claude Code 和 Harness 状态驱动 GIF。
 - **扩展动画状态**：支持低余额、余额增长和拖动状态；睡眠时间可在设置中以 1–60 分钟调整。
 - **Codex 精准状态接入（实验性）**：可选启用本机 Codex Hook，低延迟显示思考、工具、回复等状态；默认关闭。
@@ -41,7 +41,7 @@
 ### 下载与运行
 
 从 [最新 Releases](https://github.com/Azzle05/Deepseek-Whale-Pet/releases/latest)
-下载 `DeepSeek-Whale-Pet-1.6.3-portable.exe`，双击运行即可。
+下载 `DeepSeek-Whale-Pet-1.7.0-portable.exe`，双击运行即可。
 
 SHA256 以对应 Release 页面公布的最终构建值为准。
 
@@ -57,10 +57,11 @@ API Key 可在 [DeepSeek 开放平台](https://platform.deepseek.com) 获取。
 
 ### 自动更新
 
-设置页的“自动更新”区域可以检查 GitHub Releases 中的最新版本。自动下载仅接受
-固定的便携版文件名，并在安装前校验 Release 描述中公布的 SHA256。校验缺失或
-失败时不会覆盖当前程序，而是提示前往 Releases 手动下载。开发模式和自检模式
-不会执行更新安装。
+设置页的“自动更新”区域可以检查 GitHub Releases 中的最新版本，并显示版本说明、
+下载进度、已下载大小与 SHA256 校验状态。自动下载仅接受固定的便携版文件名，并在
+安装前校验 Release 描述中公布的 SHA256。校验缺失或失败时不会覆盖当前程序；替换
+新版本或首次启动失败时，会自动恢复旧版本备份，再提示前往 Releases 手动下载。
+开发模式和自检模式不会执行更新安装。
 
 ### Agent 状态动画（实验性）
 
@@ -311,7 +312,7 @@ npm run smoke
    桌面化、余额查询、Hook/JSONL 接入和 Cordis 桥接等属于本项目结合实际需求
    的扩展实现。
 
-感谢以上项目、素材作者和技术资料的作者。当前 v1.6.3 的代码整理、
+感谢以上项目、素材作者和技术资料的作者。当前 v1.7.0 的代码整理、
 设置界面调整、功能定制、文档与新构建由 Azzle 维护。
 
 上述第三方 GIF、视频和技术包版权归各自原作者所有，本项目不会对其另行授予
@@ -338,7 +339,7 @@ npm run smoke
 - **Desktop interaction**: Dragging, edge snapping, horizontal mirroring, `60%-300%` scaling, bounce feedback, and click sounds.
 - **Bubble modes**: Keep the bubble visible, show it on hover, or show it after a click.
 - **Tray support**: Hide the taskbar entry while the app is running and use the tray menu instead.
-- **Automatic updates**: Check GitHub Releases, download the portable build, verify SHA256, then replace and restart. The current version is preserved if verification fails.
+- **Automatic updates**: Check GitHub Releases, show release notes and download progress, verify SHA256, then replace and restart. The previous executable is restored automatically if replacement or initial launch fails.
 - **Agent state animation (experimental)**: State-driven GIF animation for Codex, Claude Code, and Harness.
 - **Extended animation states**: Low balance, balance increase, and dragging states; the sleep delay is configurable from 1 to 60 minutes.
 - **Codex precise state bridge (experimental)**: Optional local Codex Hook for low-latency thinking, tool, completion, and idle states. Disabled by default.
@@ -347,7 +348,7 @@ npm run smoke
 
 ### Download and Run
 
-Download `DeepSeek-Whale-Pet-1.6.3-portable.exe` from the
+Download `DeepSeek-Whale-Pet-1.7.0-portable.exe` from the
 [latest Releases](https://github.com/Azzle05/Deepseek-Whale-Pet/releases/latest)
 and run it directly.
 
@@ -366,12 +367,14 @@ An API key can be created on the [DeepSeek Platform](https://platform.deepseek.c
 
 ### Automatic Updates
 
-The **Automatic Updates** section in Settings checks the latest GitHub Release.
-Automatic downloads accept only the expected portable executable name and verify
-the SHA256 published in the Release description before installation. If the hash
-is missing or does not match, the current executable is preserved and the app
-offers the Releases page for a manual download. Development and smoke-test runs
-never install updates.
+The **Automatic Updates** section in Settings checks the latest GitHub Release and
+shows the release notes, download progress, downloaded and total byte counts, and
+SHA256 verification status. Automatic downloads accept only the expected portable
+executable name and verify the SHA256 published in the Release description before
+installation. If the hash is missing or does not match, the current executable is
+preserved. If replacement or the first launch fails, the app automatically restores
+the previous executable backup and offers the Releases page for a manual download.
+Development and smoke-test runs never install updates.
 
 ### Agent State Animation (Experimental)
 
@@ -647,7 +650,7 @@ references:
    extensions shaped around this application's requirements.
 
 Thanks to the authors of those projects, assets, and technical references.
-The v1.6.3 code cleanup, settings redesign, feature customization,
+The v1.7.0 code cleanup, settings redesign, feature customization,
 documentation, and builds are maintained by Azzle.
 
 Copyright in the third-party GIFs, videos, and technical package remains with

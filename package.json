@@ -1,6 +1,6 @@
 {
   "name": "deepseek-whale-pet",
-  "version": "1.6.3",
+  "version": "1.7.0",
   "description": "DeepSeek 余额小鲸鱼独立桌面桌宠",
   "main": "main.js",
   "scripts": {

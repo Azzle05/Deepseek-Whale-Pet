@@ -1,5 +1,5 @@
 // DeepSeek 余额桌宠 —— 渲染层
-// 拖拽(屏幕坐标)、四分之一吸附(可关)、镜像、Q弹、缩放、点击刷新、右键菜单、自定义名称。
+// 拖拽(屏幕坐标)、边缘吸附(可关)、镜像、Q弹、缩放、点击刷新、右键菜单、自定义名称。
 // 新增：悬停详情、闲置半透明、变动弹跳、提示音效、随机语录、自定义图片、今日消耗。
 'use strict'
 
@@ -7,6 +7,7 @@ var CLICK_SQ = 9
 var ANIM_MS = 700
 var CHANGE_MS = 900
 var BUBBLE_MS = 5000
+var SNAP_EDGE_RATIO = 0.1
 var AUDIO_GAIN = 0.65
 var LAST_VIEW_STORAGE_KEY = 'dshp.lastViewedBalance.v1'
 // 峰谷时段（北京时间）：工作日 9–12 与 14–18 点为高峰；2026-08-23 起周末全天谷价
@@ -85,6 +86,7 @@ var bubbleHideTimer = null
 var peakShown = false
 var detailType = 'peak'
 var lastQuoteText = ''
+var lastQuoteAt = 0
 var hitCanvas = null
 var hitData = null
 var hitReady = false
@@ -470,7 +472,7 @@ function renderQuote() {
   var q = randomQuote()
   if (!q) { renderPeak(); return }
   var length = q.length
-  var size = length <= 16 ? 62 : (length <= 28 ? 54 : (length <= 48 ? 46 : (length <= 80 ? 38 : 32)))
+  var size = length <= 12 ? 88 : (length <= 20 ? 80 : (length <= 32 ? 70 : (length <= 52 ? 60 : (length <= 84 ? 50 : 42))))
   peakEl.className = 'dshp-quote'
   peakEl.textContent = q
   peakEl.style.fontSize = 'calc(var(--dshp-u) * ' + size + ')'
@@ -492,7 +494,7 @@ function renderDetail() {
     renderMemoryDetail()
     return
   }
-  if (state.flags.quotesEnabled && state.quotes.length > 0) {
+  if (shouldShowQuote()) {
     detailType = 'quote'
     renderQuote()
   } else {
@@ -566,6 +568,15 @@ function randomQuote() {
   var quote = candidates[Math.floor(Math.random() * candidates.length)] || state.quotes[0]
   lastQuoteText = quote
   return quote
+}
+
+function shouldShowQuote() {
+  if (!state.flags.quotesEnabled || state.quotes.length === 0) return false
+  var now = Date.now()
+  if (now - lastQuoteAt < 45000) return false
+  if (Math.random() > 0.22) return false
+  lastQuoteAt = now
+  return true
 }
 
 // ---------------------------------------------------------------------------
@@ -1069,11 +1080,13 @@ function endDrag(e, clickAllowed) {
   if (state.snap) {
     var centerX = left + drag.w / 2
     var centerY = top + drag.h / 2
-    if (centerX < wa.x + wa.width / 4) { state.h = 'left'; state.hOff = 0 }
-    else if (centerX > wa.x + wa.width * 3 / 4) { state.h = 'right'; state.hOff = 0 }
+    var edgeX = wa.width * SNAP_EDGE_RATIO
+    var edgeY = wa.height * SNAP_EDGE_RATIO
+    if (centerX < wa.x + edgeX) { state.h = 'left'; state.hOff = 0 }
+    else if (centerX > wa.x + wa.width - edgeX) { state.h = 'right'; state.hOff = 0 }
     else { state.h = null; state.hOff = left }
-    if (centerY < wa.y + wa.height / 4) { state.v = 'top'; state.vOff = 0 }
-    else if (centerY > wa.y + wa.height * 3 / 4) { state.v = 'bottom'; state.vOff = 0 }
+    if (centerY < wa.y + edgeY) { state.v = 'top'; state.vOff = 0 }
+    else if (centerY > wa.y + wa.height - edgeY) { state.v = 'bottom'; state.vOff = 0 }
     else { state.v = null; state.vOff = top }
   } else {
     state.h = null

@@ -120,6 +120,27 @@
     color: #526361; font-size: 11px; line-height: 1.55; word-break: break-word;
   }
   .update-state strong { color: #294d48; }
+  .update-progress {
+    display: none; height: 7px; margin: -3px 0 9px; overflow: hidden;
+    border-radius: 99px; background: #e3ecea;
+  }
+  .update-progress.show { display: block; }
+  .update-progress-bar {
+    width: 0; height: 100%; border-radius: inherit;
+    background: linear-gradient(90deg, #3f9f98, #77c4bc);
+    transition: width .18s ease;
+  }
+  .update-progress-meta {
+    display: none; margin: -4px 0 9px; color: #61716f; font-size: 11px;
+  }
+  .update-progress-meta.show { display: block; }
+  .update-verified { color: #14785b; font-weight: 700; }
+  .update-notes {
+    display: none; max-height: 132px; overflow: auto; padding: 8px 9px; margin: 0 0 9px;
+    border: 1px solid #e5e2d8; border-radius: 7px; background: #fffdf8;
+    color: #59605e; font-size: 11px; line-height: 1.5; white-space: pre-wrap;
+  }
+  .update-notes.show { display: block; }
   .agent-panel {
     padding: 12px 0 8px;
     border-top: 1px solid #e4ebea;
@@ -298,6 +319,8 @@
             </div>
             <div>Hook 事件：<span class="agent-status-value" id="codexHookEventCount">--</span></div>
             <div>运行状态：<span class="agent-status-value" id="codexHookRuntimeText">--</span></div>
+            <div>最近事件：<span class="agent-status-value" id="codexHookLastEvent">--</span></div>
+            <div>事件来源：<span class="agent-status-value" id="codexHookLastSource">--</span></div>
           </div>
           <div class="agent-actions">
             <button class="agent-action primary" id="codexHookInstallBtn" type="button">检查并修复</button>
@@ -335,6 +358,8 @@
             </div>
             <div>Hook 事件：<span class="agent-status-value" id="claudeHookEventCount">--</span></div>
             <div>运行状态：<span class="agent-status-value" id="claudeHookRuntimeText">--</span></div>
+            <div>最近事件：<span class="agent-status-value" id="claudeHookLastEvent">--</span></div>
+            <div>事件来源：<span class="agent-status-value" id="claudeHookLastSource">--</span></div>
           </div>
           <div class="agent-actions">
             <button class="agent-action primary" id="claudeHookInstallBtn" type="button">检查并修复</button>
@@ -372,6 +397,8 @@
             </div>
             <div>插件事件：<span class="agent-status-value" id="harnessHookEventCount">--</span></div>
             <div>运行状态：<span class="agent-status-value" id="harnessHookRuntimeText">--</span></div>
+            <div>最近事件：<span class="agent-status-value" id="harnessHookLastEvent">--</span></div>
+            <div>事件来源：<span class="agent-status-value" id="harnessHookLastSource">--</span></div>
           </div>
           <div class="agent-actions">
             <button class="agent-action primary" id="harnessHookInstallBtn" type="button">安装或修复</button>
@@ -397,6 +424,7 @@
             <span id="agentStatusText">等待 Agent 事件</span>
           </div>
           <div>最近事件：<span class="agent-status-value" id="agentLastEvent">--</span></div>
+          <div>事件来源：<span class="agent-status-value" id="agentLastSource">--</span></div>
           <div>更新时间：<span class="agent-status-value" id="agentLastUpdate">--</span></div>
         </div>
         <label class="check">
@@ -583,7 +611,12 @@
         <button class="update-btn" id="updateInstallBtn" type="button" disabled>安装并重启</button>
         <button class="update-btn manual" id="updateReleaseBtn" type="button">打开 Releases</button>
       </div>
-      <div class="tip">更新包只从项目 Releases 获取，并在安装前校验 SHA256；校验失败时保留当前版本。</div>
+      <div class="update-progress" id="updateProgressWrap" aria-hidden="true">
+        <div class="update-progress-bar" id="updateProgressBar"></div>
+      </div>
+      <div class="update-progress-meta" id="updateProgressText"></div>
+      <div class="update-notes" id="updateNotes"></div>
+      <div class="tip">更新包只从项目 Releases 获取，安装前会校验 SHA256。替换或启动失败时会自动恢复旧版本。</div>
     </div>
   </div>
 
